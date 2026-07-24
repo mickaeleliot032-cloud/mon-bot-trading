@@ -82,6 +82,35 @@ class TradingEngine:
                 LOGGER.exception("Erreur non bloquante dans la boucle principale.")
                 time_module.sleep(60)
 
+    def run_scheduled(self) -> None:
+        """Exécute un passage court adapté à GitHub Actions.
+
+        Sans position, le job réalise au plus le scan logique courant puis quitte.
+        Avec une position ouverte, il reste actif quelques minutes et conserve
+        ainsi la surveillance à la minute entre deux déclenchements planifiés.
+        """
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        )
+        LOGGER.info("Passage planifié de l'agent V4.")
+        self.run_once(datetime.now(self.timezone))
+
+        follow_up_polls = (
+            self.settings.scheduled_monitor_window_seconds
+            // self.settings.position_poll_seconds
+        )
+        for _ in range(follow_up_polls):
+            if not self.state.get("position"):
+                break
+            time_module.sleep(self.settings.position_poll_seconds)
+            self.run_once(datetime.now(self.timezone))
+
+        # Garantit la présence du répertoire mis en cache, même si ce passage
+        # a eu lieu hors des heures de marché.
+        self.store.save(self.state)
+
     def run_once(self, now: datetime) -> None:
         now = now.astimezone(self.timezone)
         if self.state.get("date") != now.date().isoformat():
