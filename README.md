@@ -14,7 +14,8 @@ Il ne passe aucun ordre auprès d'un courtier.
   volatilité, secteur, contexte de marché et actualités ;
 - confirmation sur deux scans pour un signal normal, mais entrée immédiate
   lorsqu'un score fort atteint 80 ;
-- position surveillée chaque minute, indépendamment des scans de classement ;
+- position surveillée chaque minute pendant les fenêtres GitHub Actions,
+  indépendamment des scans de classement ;
 - stop dynamique selon l'ATR, passage au point mort à +0,65 % ;
 - TP à +1 %, étendu à +2 % lorsque +1 % est atteint avant 10 h, avec stop
   suiveur ;
@@ -37,15 +38,35 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Chargez ensuite les variables de `.env` dans votre hébergeur, puis :
+Chargez ensuite les variables de `.env` dans votre environnement, puis :
 
 ```bash
 python mon_bot.py
 ```
 
 Sans variables Telegram, le moteur fonctionne et écrit les notifications dans
-les logs. Sur Render, utilisez `python mon_bot.py` comme commande de démarrage
-et montez un disque persistant sur `/data`.
+les logs.
+
+## Exécution gratuite avec GitHub Actions
+
+Le workflow `.github/workflows/trading-agent.yml` se déclenche du lundi au
+vendredi toutes les cinq minutes entre 9 h et 17 h 55, heure de Paris. Le moteur
+n'effectue toutefois les classements qu'à 9 h 05, 9 h 15, puis toutes les
+15 minutes jusqu'à 16 h. Les autres passages servent à surveiller une éventuelle
+position et à envoyer le bilan après la sortie forcée de 17 h 20.
+
+L'état JSON et le journal CSV sont sauvegardés dans un cache GitHub privé au
+workflow. Ils ne sont ni ajoutés au dépôt public, ni accessibles aux visiteurs.
+
+Après fusion de la V4 dans `main`, ajoutez ces deux secrets dans
+**Settings → Secrets and variables → Actions → New repository secret** :
+
+- `TELEGRAM_BOT_TOKEN` : nouveau jeton généré par BotFather ;
+- `TELEGRAM_CHAT_ID` : identifiant du chat destinataire.
+
+Le workflow peut ensuite être testé manuellement depuis l'onglet **Actions**,
+workflow **Agent de trading V4**, bouton **Run workflow**. Les exécutions
+planifiées utilisent uniquement la version présente sur la branche par défaut.
 
 ## Variables obligatoires pour Telegram
 
@@ -53,7 +74,7 @@ et montez un disque persistant sur `/data`.
 - `TELEGRAM_CHAT_ID` : identifiant du chat destinataire.
 
 L'ancien jeton figurait publiquement dans la première version du dépôt. Il doit
-être révoqué dans BotFather puis remplacé dans l'environnement Render.
+rester révoqué dans BotFather et ne jamais être recopié dans un fichier.
 
 ## Validation
 
