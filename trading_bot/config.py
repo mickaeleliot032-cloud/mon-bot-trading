@@ -38,6 +38,9 @@ class Settings:
     scan_interval_minutes: int = 15
     loop_sleep_seconds: int = 30
     position_poll_seconds: int = 60
+    scheduled_monitor_window_seconds: int = field(
+        default_factory=lambda: _env_int("SCHEDULED_MONITOR_WINDOW_SECONDS", 240)
+    )
 
     watch_threshold: float = 65.0
     signal_threshold: float = 72.0
@@ -88,6 +91,10 @@ class Settings:
             raise ValueError("PAPER_CAPITAL_EUR doit être strictement positif.")
         if self.round_trip_fees_eur < 0:
             raise ValueError("ROUND_TRIP_FEES_EUR ne peut pas être négatif.")
+        if self.scheduled_monitor_window_seconds < 0:
+            raise ValueError(
+                "SCHEDULED_MONITOR_WINDOW_SECONDS ne peut pas être négatif."
+            )
         if not (self.watch_threshold < self.signal_threshold < self.strong_threshold):
             raise ValueError("Les seuils 65/72/80 doivent être croissants.")
         if bool(self.telegram_token) != bool(self.telegram_chat_id):
