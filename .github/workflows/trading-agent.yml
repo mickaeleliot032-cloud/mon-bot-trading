@@ -2,6 +2,7 @@ name: Agent de trading V4
 
 on:
   workflow_dispatch:
+  pull_request:
   schedule:
     - cron: "*/5 9-17 * * 1-5"
       timezone: "Europe/Paris"
@@ -14,7 +15,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validation:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installer les dépendances de validation
+        run: pip install --requirement requirements-dev.txt
+
+      - name: Vérifier le code
+        run: |
+          ruff check .
+          pytest -q
+
   paper-trading:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
