@@ -36,7 +36,7 @@ class TradingEngine(BaseTradingEngine):
         LOGGER.info("Test Telegram V4.1 demandé.")
         sent = self.notifier.send(
             "✅ TEST TELEGRAM RÉUSSI — AGENT V4.1\n"
-            f"GitHub Actions communique correctement avec le bot.\n"
+            "GitHub Actions communique correctement avec le bot.\n"
             f"Heure de Paris : {now.strftime('%d/%m/%Y %H:%M:%S')}\n"
             "Mode : paper trading"
         )
@@ -45,6 +45,53 @@ class TradingEngine(BaseTradingEngine):
         else:
             LOGGER.error("Échec de la notification de test Telegram.")
         return sent
+
+    def _run_scan(self, now: datetime, allow_entry: bool) -> list[Score]:
+        ranking = super()._run_scan(now, allow_entry)
+        slot = self.scan_slot(now) or now.strftime("%H:%M")
+
+        LOGGER.info(
+            "RAPPORT SCAN %s — %d actions classées — entrée autorisée=%s.",
+            slot,
+            len(ranking),
+            "oui" if allow_entry else "non",
+        )
+
+        if not ranking:
+            LOGGER.info("Aucun classement exploitable pour ce scan.")
+            return ranking
+
+        for index, score in enumerate(ranking[:5], start=1):
+            reasons = ", ".join(score.reasons[:3]) or "aucun motif dominant"
+            LOGGER.info(
+                "TOP %d — %s (%s) : %.1f/100, niveau=%s, éligible=%s, motifs=%s.",
+                index,
+                score.name,
+                score.ticker,
+                score.final,
+                score.level,
+                "oui" if score.eligible else "non",
+                reasons,
+            )
+
+        leader = ranking[0]
+        if self.state.get("entry_taken"):
+            decision = "aucune nouvelle entrée : limite quotidienne déjà utilisée"
+        elif not allow_entry:
+            decision = "observation uniquement : fenêtre d'entrée non ouverte"
+        elif not leader.eligible:
+            decision = "aucune entrée : meilleur candidat non éligible"
+        elif leader.final < self.settings.watch_threshold:
+            decision = "aucune entrée : score inférieur au seuil de surveillance"
+        elif leader.final < self.settings.signal_threshold:
+            decision = "aucune entrée : surveillance sans signal confirmé"
+        elif self.state.get("position"):
+            decision = "position ouverte"
+        else:
+            decision = "signal potentiel en attente de confirmation ou entrée déclenchée"
+
+        LOGGER.info("DÉCISION SCAN %s — %s.", slot, decision)
+        return ranking
 
     def _notify_level_change(self, leader: Score) -> None:
         levels = {"NEUTRE": 0, "SURVEILLANCE": 1, "SIGNAL": 2, "FORT": 3}
@@ -65,9 +112,7 @@ class TradingEngine(BaseTradingEngine):
         if sent:
             alerted[leader.ticker] = current
             self.store.save(self.state)
-            LOGGER.info(
-                "Alerte %s envoyée pour %s.", leader.level, leader.name
-            )
+            LOGGER.info("Alerte %s envoyée pour %s.", leader.level, leader.name)
         else:
             LOGGER.warning(
                 "Alerte %s non envoyée pour %s : elle pourra être retentée.",
