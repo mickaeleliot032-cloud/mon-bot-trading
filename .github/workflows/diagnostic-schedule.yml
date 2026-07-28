@@ -1,0 +1,21 @@
+name: Diagnostic planification GitHub Actions
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Test minimal en UTC, sans fuseau horaire ni secrets.
+    - cron: "1-59/5 * * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Afficher l'heure et le déclencheur
+        run: |
+          echo "event=${{ github.event_name }}"
+          date -u
+          echo "La planification GitHub Actions fonctionne."
