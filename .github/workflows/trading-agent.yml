@@ -1,12 +1,15 @@
-name: Agent de trading V4
+name: Agent de trading V4.1
 
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: "Origine du déclenchement"
+        required: false
+        default: "manuel"
+  repository_dispatch:
+    types: [trading-agent-v4]
   pull_request:
-  schedule:
-    # Décalage de 2 minutes pour éviter les pics de charge GitHub aux minutes rondes.
-    - cron: "2-59/5 9-17 * * 1-5"
-      timezone: "Europe/Paris"
 
 permissions:
   contents: read
@@ -58,7 +61,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: data
-          key: trading-state-v4-${{ github.run_id }}
+          key: trading-state-v4-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             trading-state-v4-
 
@@ -69,11 +72,28 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python mon_bot.py --scheduled
+          TRIGGER_SOURCE: ${{ inputs.source || github.event.action || github.event_name }}
+        run: |
+          echo "Déclenchement : ${TRIGGER_SOURCE}"
+          python mon_bot.py --scheduled
 
       - name: Sauvegarder l'état du paper trading
         if: always()
         uses: actions/cache/save@v4
         with:
           path: data
-          key: trading-state-v4-${{ github.run_id }}
+          key: trading-state-v4-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Alerter sur Telegram en cas d'échec
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl --fail --silent --show-error \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --header "Content-Type: application/json" \
+              --data "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"text\":\"⚠️ Échec de l’agent de trading V4.1 — exécution GitHub ${GITHUB_RUN_ID}. Consulte l’onglet Actions.\"}"
+          fi
