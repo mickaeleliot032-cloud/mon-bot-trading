@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
   pull_request:
   schedule:
-    - cron: "*/5 9-17 * * 1-5"
+    # Décalage de 2 minutes pour éviter les pics de charge GitHub aux minutes rondes.
+    - cron: "2-59/5 9-17 * * 1-5"
       timezone: "Europe/Paris"
 
 permissions:
