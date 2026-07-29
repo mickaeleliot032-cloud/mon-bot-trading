@@ -74,8 +74,22 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TRIGGER_SOURCE: ${{ inputs.source || github.event.action || github.event_name }}
         run: |
-          echo "Déclenchement : ${TRIGGER_SOURCE}"
-          python mon_bot.py --scheduled
+          mkdir -p data
+          echo "Déclenchement : ${TRIGGER_SOURCE}" | tee data/execution.log
+          set -o pipefail
+          python mon_bot.py --scheduled 2>&1 | tee -a data/execution.log
+
+      - name: Publier les fichiers de suivi
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suivi-trading-${{ github.run_number }}
+          path: |
+            data/*.csv
+            data/*.json
+            data/execution.log
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Sauvegarder l'état du paper trading
         if: always()
