@@ -1,21 +1,85 @@
-name: Diagnostic planification GitHub Actions
+name: Planificateur Agent de trading V4.1
 
 on:
   workflow_dispatch:
   schedule:
-    # Test minimal en UTC, sans fuseau horaire ni secrets.
-    - cron: "1-59/5 * * * *"
+    # GitHub Actions interprète le cron en UTC.
+    # Toutes les 10 minutes, décalé de 3 minutes, du lundi au vendredi.
+    - cron: "3,13,23,33,43,53 7-16 * * 1-5"
 
 permissions:
   contents: read
 
+concurrency:
+  group: trading-agent-v4
+  cancel-in-progress: false
+
 jobs:
-  heartbeat:
+  paper-trading:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 10
+
     steps:
-      - name: Afficher l'heure et le déclencheur
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Restaurer l'état du paper trading
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: trading-state-v4-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            trading-state-v4-
+
+      - name: Installer les dépendances
+        run: pip install --requirement requirements.txt
+
+      - name: Exécuter le passage planifié
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TRIGGER_SOURCE: ${{ github.event_name }}
         run: |
-          echo "event=${{ github.event_name }}"
-          date -u
-          echo "La planification GitHub Actions fonctionne."
+          mkdir -p data
+          echo "Déclenchement : ${TRIGGER_SOURCE}" | tee data/execution.log
+          set -o pipefail
+          python mon_bot.py --scheduled 2>&1 | tee -a data/execution.log
+
+      - name: Publier les fichiers de suivi
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suivi-trading-${{ github.run_number }}
+          path: |
+            data/*.csv
+            data/*.json
+            data/execution.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Sauvegarder l'état du paper trading
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: trading-state-v4-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Alerter sur Telegram en cas d'échec
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl --fail --silent --show-error \
+              --request POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --header "Content-Type: application/json" \
+              --data "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"text\":\"⚠️ Échec du planificateur de l’agent de trading V4.1 — exécution GitHub ${GITHUB_RUN_ID}. Consulte l’onglet Actions.\"}"
+          fi
