@@ -14,7 +14,7 @@ on:
     # GitHub Actions interprète le cron en UTC. Cette plage couvre les heures
     # de marché à Paris en été comme en hiver ; le bot ignore les passages hors marché.
     # Déclenchement toutes les 10 minutes, décalé de 3 minutes pour éviter les pics de charge.
-    - cron: "3-59/10 7-16 * * 1-5"
+    - cron: "3,13,23,33,43,53 7-16 * * 1-5"
 
 permissions:
   contents: read
