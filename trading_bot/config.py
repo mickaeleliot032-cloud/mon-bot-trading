@@ -82,6 +82,12 @@ class Settings:
     telegram_chat_id: str | None = field(
         default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID")
     )
+    google_sheets_url: str | None = field(
+        default_factory=lambda: os.getenv("GOOGLE_SHEETS_URL")
+    )
+    google_sheets_token: str | None = field(
+        default_factory=lambda: os.getenv("GOOGLE_SHEETS_TOKEN")
+    )
     http_timeout_seconds: int = field(
         default_factory=lambda: _env_int("HTTP_TIMEOUT_SECONDS", 10)
     )
@@ -100,4 +106,8 @@ class Settings:
         if bool(self.telegram_token) != bool(self.telegram_chat_id):
             raise ValueError(
                 "TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID doivent être définis ensemble."
+            )
+        if bool(self.google_sheets_url) != bool(self.google_sheets_token):
+            raise ValueError(
+                "GOOGLE_SHEETS_URL et GOOGLE_SHEETS_TOKEN doivent être définis ensemble."
             )
