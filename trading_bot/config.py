@@ -34,6 +34,7 @@ class Settings:
     entry_start_time: time = time(9, 15)
     last_scan_time: time = time(16, 0)
     forced_exit_time: time = time(17, 20)
+    daily_summary_time: time = time(17, 30)
     extended_tp_cutoff: time = time(10, 0)
     scan_interval_minutes: int = 15
     loop_sleep_seconds: int = 30
@@ -100,6 +101,10 @@ class Settings:
         if self.scheduled_monitor_window_seconds < 0:
             raise ValueError(
                 "SCHEDULED_MONITOR_WINDOW_SECONDS ne peut pas être négatif."
+            )
+        if self.daily_summary_time <= self.forced_exit_time:
+            raise ValueError(
+                "Le bilan journalier doit être planifié après la sortie forcée."
             )
         if not (self.watch_threshold < self.signal_threshold < self.strong_threshold):
             raise ValueError("Les seuils 65/72/80 doivent être croissants.")
