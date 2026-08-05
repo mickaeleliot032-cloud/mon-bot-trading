@@ -7,15 +7,20 @@ from datetime import datetime
 from typing import Any
 
 from trading_bot.engine import TradingEngine
+from trading_bot.google_sheets import GoogleSheetsWebhook
 from trading_bot.scoring import Score
 
 
 class TradingEngineV42(TradingEngine):
-    """Version 4.2 sans duplication du point d'entrée.
+    """Version 4.2 avec traçabilité locale et synchronisation Google Sheets."""
 
-    La stratégie de trading reste celle de la V4. La V4.2 ajoute uniquement
-    la traçabilité nécessaire pour relier le bilan au trade réellement exécuté.
-    """
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.google_sheets = GoogleSheetsWebhook(
+            self.settings.google_sheets_url,
+            self.settings.google_sheets_token,
+            self.settings.http_timeout_seconds,
+        )
 
     def _run_scan(self, now: datetime, allow_entry: bool) -> list[Score]:
         started = time.monotonic()
@@ -23,33 +28,33 @@ class TradingEngineV42(TradingEngine):
         try:
             ranking = super()._run_scan(now, allow_entry)
             leader = ranking[0] if ranking else None
-            self.state.setdefault("scan_history", []).append(
-                {
-                    "time": now.isoformat(),
-                    "slot": slot,
-                    "status": "ok" if ranking else "empty",
-                    "actions_ranked": len(ranking),
-                    "leader_ticker": leader.ticker if leader else None,
-                    "leader_name": leader.name if leader else None,
-                    "leader_score": round(leader.final, 2) if leader else None,
-                    "duration_seconds": round(time.monotonic() - started, 2),
-                }
-            )
+            event = {
+                "time": now.isoformat(),
+                "slot": slot,
+                "status": "ok" if ranking else "empty",
+                "actions_ranked": len(ranking),
+                "leader_ticker": leader.ticker if leader else None,
+                "leader_name": leader.name if leader else None,
+                "leader_score": round(leader.final, 2) if leader else None,
+                "duration_seconds": round(time.monotonic() - started, 2),
+            }
+            self.state.setdefault("scan_history", []).append(event)
             self.state["scan_history"] = self.state["scan_history"][-80:]
             self.store.save(self.state)
+            self.google_sheets.send("scan", **event)
             return ranking
         except Exception as exc:
-            self.state.setdefault("scan_history", []).append(
-                {
-                    "time": now.isoformat(),
-                    "slot": slot,
-                    "status": "error",
-                    "error": type(exc).__name__,
-                    "duration_seconds": round(time.monotonic() - started, 2),
-                }
-            )
+            event = {
+                "time": now.isoformat(),
+                "slot": slot,
+                "status": "error",
+                "error": type(exc).__name__,
+                "duration_seconds": round(time.monotonic() - started, 2),
+            }
+            self.state.setdefault("scan_history", []).append(event)
             self.state["scan_history"] = self.state["scan_history"][-80:]
             self.store.save(self.state)
+            self.google_sheets.send("scan", **event)
             raise
 
     def _notify_level_change(self, leader: Score) -> None:
@@ -63,21 +68,21 @@ class TradingEngineV42(TradingEngine):
         super()._notify_level_change(leader)
 
         if will_notify:
-            self.state.setdefault("alert_history", []).append(
-                {
-                    "time": datetime.now(self.timezone).isoformat(),
-                    "ticker": leader.ticker,
-                    "name": leader.name,
-                    "score": round(leader.final, 2),
-                    "level": leader.level,
-                    "price": round(float(leader.snapshot["price"]), 4),
-                    "return_open_pct": round(
-                        float(leader.snapshot["return_open_pct"]), 3
-                    ),
-                }
-            )
+            event = {
+                "time": datetime.now(self.timezone).isoformat(),
+                "ticker": leader.ticker,
+                "name": leader.name,
+                "score": round(leader.final, 2),
+                "level": leader.level,
+                "price": round(float(leader.snapshot["price"]), 4),
+                "return_open_pct": round(
+                    float(leader.snapshot["return_open_pct"]), 3
+                ),
+            }
+            self.state.setdefault("alert_history", []).append(event)
             self.state["alert_history"] = self.state["alert_history"][-80:]
             self.store.save(self.state)
+            self.google_sheets.send("alert", **event)
 
     def _close_position(self, now: datetime, exit_price: float, reason: str) -> None:
         position = self.state.get("position")
@@ -106,6 +111,7 @@ class TradingEngineV42(TradingEngine):
         trade["capital_after_eur"] = capital_after
         self.state["last_trade"] = trade
         self.store.save(self.state)
+        self.google_sheets.send("trade", **trade)
 
     def _send_daily_summary(self) -> None:
         start = float(self.state["daily_start_capital"])
@@ -161,5 +167,19 @@ class TradingEngineV42(TradingEngine):
             ]
         )
         self.notifier.send("\n".join(lines))
+
+        summary = {
+            "date": self.state.get("date"),
+            "capital_start_eur": start,
+            "capital_end_eur": end,
+            "net_pnl_eur": end - start,
+            "trade_taken": bool(trade),
+            "trade": trade,
+            "leader": leader,
+            "successful_scans": successful_scans,
+            "scan_errors": scan_errors,
+            "strong_alerts": strong_alerts,
+        }
+        self.google_sheets.send("summary", **summary)
         self.state["summary_sent"] = True
         self.store.save(self.state)
