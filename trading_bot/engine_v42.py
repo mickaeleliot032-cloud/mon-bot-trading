@@ -22,6 +22,24 @@ class TradingEngineV42(TradingEngine):
             self.settings.http_timeout_seconds,
         )
 
+    def run_once(self, now: datetime) -> None:
+        """Dissocie la sortie forcée de 17 h 20 du bilan de 17 h 30."""
+
+        now = now.astimezone(self.timezone)
+        before_summary = now.time() < self.settings.daily_summary_time
+        summary_already_sent = bool(self.state.get("summary_sent"))
+
+        if before_summary and not summary_already_sent:
+            # Le moteur parent utilise summary_sent pour empêcher son bilan
+            # immédiat à 17 h 20. La valeur temporaire n'est pas sauvegardée.
+            self.state["summary_sent"] = True
+
+        try:
+            super().run_once(now)
+        finally:
+            if before_summary and not summary_already_sent:
+                self.state["summary_sent"] = False
+
     def _run_scan(self, now: datetime, allow_entry: bool) -> list[Score]:
         started = time.monotonic()
         slot = self.scan_slot(now)
