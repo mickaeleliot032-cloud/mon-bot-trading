@@ -26,11 +26,40 @@ class GoogleSheetsWebhook:
     def enabled(self) -> bool:
         return bool(self.url and self.token)
 
+    @staticmethod
+    def _apps_script_action(action: str, payload: dict[str, Any]) -> str:
+        """Traduit les événements V4 vers les actions attendues par Code.gs."""
+        normalized = action.strip().lower()
+
+        if normalized == "alert":
+            return "ajouter_signal"
+        if normalized == "scan":
+            return "ajouter_suivi"
+        if normalized == "trade":
+            closing_fields = {
+                "heure_sortie",
+                "prix_sortie",
+                "motif_sortie",
+                "performance_brute",
+                "resultat_net",
+                "capital_apres",
+            }
+            status = str(payload.get("statut", payload.get("status", ""))).upper()
+            is_closing = bool(closing_fields.intersection(payload)) or status in {
+                "FERME",
+                "FERMÉ",
+                "CLOSED",
+            }
+            return "fermer_trade" if is_closing else "ouvrir_trade"
+
+        return normalized
+
     def send(self, action: str, **payload: Any) -> bool:
         if not self.enabled:
             return False
 
-        body = {"token": self.token, "action": action, **payload}
+        apps_script_action = self._apps_script_action(action, payload)
+        body = {"token": self.token, "action": apps_script_action, **payload}
         try:
             response = requests.post(
                 str(self.url),
@@ -42,17 +71,23 @@ class GoogleSheetsWebhook:
             result = response.json()
             if not result.get("success"):
                 LOGGER.warning(
-                    "Google Sheets a refusé l'événement %s : %s",
+                    "Google Sheets a refusé l'événement %s (%s) : %s",
                     action,
+                    apps_script_action,
                     result.get("error", "erreur inconnue"),
                 )
                 return False
-            LOGGER.info("Événement Google Sheets enregistré : %s", action)
+            LOGGER.info(
+                "Événement Google Sheets enregistré : %s (%s)",
+                action,
+                apps_script_action,
+            )
             return True
         except (requests.RequestException, ValueError) as exc:
             LOGGER.warning(
-                "Échec non bloquant de l'envoi Google Sheets (%s) : %s",
+                "Échec non bloquant de l'envoi Google Sheets (%s/%s) : %s",
                 action,
+                apps_script_action,
                 exc,
             )
             return False
