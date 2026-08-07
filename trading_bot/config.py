@@ -114,5 +114,6 @@ class Settings:
             )
         if bool(self.google_sheets_url) != bool(self.google_sheets_token):
             raise ValueError(
-                "GOOGLE_SHEETS_URL et GOOGLE_SHEETS_TOKEN doivent être définis ensemble."
+                "GOOGLE_SHEETS_URL et GOOGLE_SHEETS_TOKEN doivent être "
+                "définis ensemble."
             )
