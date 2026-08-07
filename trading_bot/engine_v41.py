@@ -88,7 +88,9 @@ class TradingEngine(BaseTradingEngine):
         elif self.state.get("position"):
             decision = "position ouverte"
         else:
-            decision = "signal potentiel en attente de confirmation ou entrée déclenchée"
+            decision = (
+                "signal potentiel en attente de confirmation ou entrée déclenchée"
+            )
 
         LOGGER.info("DÉCISION SCAN %s — %s.", slot, decision)
         return ranking
