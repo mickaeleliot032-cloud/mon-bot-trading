@@ -35,14 +35,26 @@ class GoogleSheetsWebhook:
                 return value
         return default
 
+    @staticmethod
+    def _clock_value(value: Any) -> str:
+        if value is None or value == "":
+            return ""
+        text = str(value)
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return parsed.strftime("%H:%M:%S")
+        except ValueError:
+            return text
+
     @classmethod
     def _date_and_time(cls, payload: dict[str, Any]) -> tuple[str, str]:
         date_value = cls._first(payload, "date")
-        time_value = cls._first(payload, "heure", "time")
+        time_value = cls._first(payload, "heure")
         raw = cls._first(
             payload,
             "timestamp",
             "datetime",
+            "time",
             "entry_time",
             "exit_time",
             "heure_entree",
@@ -54,7 +66,7 @@ class GoogleSheetsWebhook:
                 date_value = date_value or parsed.date().isoformat()
                 time_value = time_value or parsed.strftime("%H:%M:%S")
             except ValueError:
-                pass
+                time_value = time_value or str(raw)
         return str(date_value or ""), str(time_value or "")
 
     @staticmethod
@@ -64,7 +76,7 @@ class GoogleSheetsWebhook:
 
         if normalized == "alert":
             return "ajouter_signal"
-        if normalized == "scan":
+        if normalized == "suivi":
             return "ajouter_suivi"
         if normalized == "trade":
             closing_fields = {
@@ -143,7 +155,7 @@ class GoogleSheetsWebhook:
             )
 
         elif action == "ouvrir_trade":
-            entry_time = cls._first(payload, "heure_entree", "entry_time")
+            entry_raw = cls._first(payload, "heure_entree", "entry_time")
             converted.update(
                 {
                     "id_trade": cls._first(payload, "id_trade", "trade_id", "id"),
@@ -151,7 +163,7 @@ class GoogleSheetsWebhook:
                     "date": date_value,
                     "action_nom": cls._first(payload, "action_nom", "name", "nom"),
                     "ticker": cls._first(payload, "ticker"),
-                    "heure_entree": entry_time or time_value,
+                    "heure_entree": cls._clock_value(entry_raw) or time_value,
                     "prix_entree": cls._first(payload, "prix_entree", "entry_price"),
                     "quantite": cls._first(payload, "quantite", "shares", "quantity"),
                     "take_profit": cls._first(
@@ -162,12 +174,11 @@ class GoogleSheetsWebhook:
             )
 
         elif action == "fermer_trade":
+            exit_raw = cls._first(payload, "heure_sortie", "exit_time")
             converted.update(
                 {
                     "id_trade": cls._first(payload, "id_trade", "trade_id", "id"),
-                    "heure_sortie": cls._first(
-                        payload, "heure_sortie", "exit_time", default=time_value
-                    ),
+                    "heure_sortie": cls._clock_value(exit_raw) or time_value,
                     "prix_sortie": cls._first(payload, "prix_sortie", "exit_price"),
                     "motif_sortie": cls._first(payload, "motif_sortie", "reason"),
                     "performance_brute": cls._first(
