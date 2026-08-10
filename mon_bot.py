@@ -1,14 +1,14 @@
-"""Point d'entrée du bot de trading V4.2."""
+"""Point d'entrée du bot de trading V4.3."""
 
 from __future__ import annotations
 
 import argparse
 
-from trading_bot.engine_v42 import TradingEngineV42
+from trading_bot.engine_v43 import TradingEngineV43
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Agent de paper trading CAC 40 V4.2")
+    parser = argparse.ArgumentParser(description="Agent de paper trading CAC 40 V4.3")
     parser.add_argument(
         "--scheduled",
         action="store_true",
@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    engine = TradingEngineV42()
+    engine = TradingEngineV43()
     if parse_args().scheduled:
         engine.run_scheduled()
     else:
