@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any
+
+import pandas as pd
 
 from trading_bot.engine import TradingEngine
 from trading_bot.engine_v42 import TradingEngineV42
 from trading_bot.indicators import build_snapshot
 from trading_bot.scoring import Score
+from trading_bot.universe import CAC40
 
 LOGGER = logging.getLogger(__name__)
 
@@ -105,6 +109,92 @@ class TradingEngineV43(TradingEngineV42):
         self._remember_signal_for_follow_up(alert_time, leader, signal_id)
         self.store.save(self.state)
         self.google_sheets.send("alert", **event)
+
+    def _finalize_signal_tracking(self, now: datetime) -> None:
+        """Ajoute au suivi le rang CAC40 et la perf max de la journée.
+
+        Ces deux informations sont calculées une seule fois, juste avant le bilan
+        journalier, puis injectées dans chaque ligne SUIVI produite par V4.2.
+        Elles n'interviennent jamais dans le scoring ni dans la décision de trade.
+        """
+
+        self._daily_ml_ranking_cache = self._build_daily_ml_ranking(now)
+        try:
+            super()._finalize_signal_tracking(now)
+        finally:
+            self._daily_ml_ranking_cache = {}
+
+    def _build_daily_ml_ranking(
+        self, now: datetime
+    ) -> dict[str, dict[str, float | int]]:
+        """Classe le CAC40 sur la performance maximale intraday depuis l'ouverture."""
+
+        tickers = [item.ticker for item in CAC40]
+        try:
+            frames = self.market_data.download_universe(
+                tickers,
+                period="1d",
+                interval="5m",
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Classement CAC40 de fin de journée indisponible : %s",
+                exc,
+            )
+            return {}
+
+        performances: list[tuple[str, float]] = []
+        for ticker in tickers:
+            frame = frames.get(ticker)
+            if frame is None or frame.empty:
+                continue
+            try:
+                localized = self._localize_market_frame(frame)
+                session = localized.loc[localized.index.date == now.date()]
+                if session.empty or "Open" not in session or "High" not in session:
+                    continue
+
+                opens = pd.to_numeric(session["Open"], errors="coerce").dropna()
+                highs = pd.to_numeric(session["High"], errors="coerce").dropna()
+                if opens.empty or highs.empty:
+                    continue
+
+                open_price = float(opens.iloc[0])
+                if open_price <= 0:
+                    continue
+                max_price = float(highs.max())
+                perf_max = (max_price / open_price - 1) * 100
+                performances.append((ticker, perf_max))
+            except Exception as exc:
+                LOGGER.debug(
+                    "Perf max journalière non calculable pour %s : %s",
+                    ticker,
+                    exc,
+                )
+
+        performances.sort(key=lambda item: item[1], reverse=True)
+        return {
+            ticker: {
+                "rang_fin_journee": rank,
+                "perf_max_journee": round(perf_max, 3),
+            }
+            for rank, (ticker, perf_max) in enumerate(performances, start=1)
+        }
+
+    def _build_suivi_payload(
+        self,
+        item: dict[str, Any],
+        frame: pd.DataFrame | None,
+        now: datetime,
+    ) -> dict[str, Any] | None:
+        payload = super()._build_suivi_payload(item, frame, now)
+        if payload is None:
+            return None
+
+        daily = getattr(self, "_daily_ml_ranking_cache", {}).get(item["ticker"], {})
+        payload["rang_fin_journee"] = daily.get("rang_fin_journee", "")
+        payload["perf_max_journee"] = daily.get("perf_max_journee", "")
+        return payload
 
     def _open_position(self, now: datetime, score: Score) -> None:
         """Ouvre le paper trade avec le dernier cours 1 minute disponible.
