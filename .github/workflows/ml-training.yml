@@ -1,0 +1,48 @@
+name: Entraînement ML Top 3
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Réentraînement hebdomadaire le dimanche soir, sans impact sur le trading.
+    - cron: "0 18 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  train-ml:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installer les dépendances ML
+        run: pip install --requirement requirements-ml.txt
+
+      - name: Entraîner et valider le modèle
+        env:
+          ML_GOOGLE_SHEET_ID: ${{ secrets.ML_GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          ML_MIN_ROWS: "60"
+          ML_MIN_TOP3: "5"
+        run: python ml/train_model.py
+
+      - name: Publier le modèle et le rapport
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: modele-top3-${{ github.run_number }}
+          path: |
+            data/ml/top3_model.joblib
+            data/ml/metrics.json
+            data/ml/dataset.csv
+          if-no-files-found: error
+          retention-days: 90
