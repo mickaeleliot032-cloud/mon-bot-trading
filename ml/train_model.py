@@ -30,24 +30,10 @@ METRICS_PATH = OUTPUT_DIR / "metrics.json"
 DATASET_PATH = OUTPUT_DIR / "dataset.csv"
 
 NUMERIC_FEATURES = [
-    "SCORE_GLOBAL",
-    "SCORE_QUANTITATIF",
-    "PRIX",
-    "VARIATION_SEANCE",
-    "EMA20",
-    "EMA50",
-    "VWAP",
-    "VOLUME_RELATIF",
-    "PERF_CAC40",
-    "SURPERF_CAC40",
-    "MOMENTUM_15M",
-    "RSI14",
-    "ATR_PCT",
-    "GAP_PCT",
-    "SCORE_MARCHE",
-    "SCORE_SECTEUR",
-    "SCORE_NEWS",
-    "HEURE_DECIMALE",
+    "SCORE_GLOBAL", "SCORE_QUANTITATIF", "PRIX", "VARIATION_SEANCE",
+    "EMA20", "EMA50", "VWAP", "VOLUME_RELATIF", "PERF_CAC40",
+    "SURPERF_CAC40", "MOMENTUM_15M", "RSI14", "ATR_PCT", "GAP_PCT",
+    "SCORE_MARCHE", "SCORE_SECTEUR", "SCORE_NEWS", "HEURE_DECIMALE",
 ]
 CATEGORICAL_FEATURES = ["NIVEAU", "SECTEUR"]
 TARGET_COLUMN = "TOP3"
@@ -78,6 +64,16 @@ def _load_via_apps_script() -> tuple[pd.DataFrame, pd.DataFrame]:
     except requests.JSONDecodeError as exc:
         raise RuntimeError("Réponse Apps Script non JSON.") from exc
 
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"Réponse Apps Script inattendue : type={type(payload).__name__}."
+        )
+
+    # Diagnostic volontairement limité aux noms de clés et aux types :
+    # aucune donnée du Sheet et aucun secret ne sont écrits dans les logs.
+    key_types = {key: type(value).__name__ for key, value in payload.items()}
+    print(f"Diagnostic Apps Script - clés/types reçus : {key_types}")
+
     if not payload.get("success"):
         raise RuntimeError(
             f"Export Apps Script refusé : {payload.get('error', 'erreur inconnue')}"
@@ -86,8 +82,15 @@ def _load_via_apps_script() -> tuple[pd.DataFrame, pd.DataFrame]:
     signals = payload.get("signaux")
     follow_up = payload.get("suivi")
     if not isinstance(signals, list) or not isinstance(follow_up, list):
-        raise RuntimeError("Export Apps Script incomplet : signaux/suivi absents.")
+        raise RuntimeError(
+            "Export Apps Script incomplet : signaux/suivi absents ou invalides. "
+            f"Clés/types reçus : {key_types}"
+        )
 
+    print(
+        "Export Apps Script reçu : "
+        f"{len(signals)} lignes SIGNAUX, {len(follow_up)} lignes SUIVI."
+    )
     return (
         _normalize_columns(pd.DataFrame(signals)),
         _normalize_columns(pd.DataFrame(follow_up)),
@@ -97,8 +100,7 @@ def _load_via_apps_script() -> tuple[pd.DataFrame, pd.DataFrame]:
 def _hour_to_decimal(value: Any) -> float:
     if value is None or value == "":
         return np.nan
-    text = str(value).strip()
-    parsed = pd.to_datetime(text, errors="coerce")
+    parsed = pd.to_datetime(str(value).strip(), errors="coerce")
     if pd.isna(parsed):
         return np.nan
     return float(parsed.hour + parsed.minute / 60 + parsed.second / 3600)
@@ -158,35 +160,25 @@ def _time_split(dataset: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def _build_pipeline() -> Pipeline:
-    numeric = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
-    )
-    categorical = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("onehot", OneHotEncoder(handle_unknown="ignore")),
-        ]
-    )
-    preprocessing = ColumnTransformer(
-        transformers=[
-            ("numeric", numeric, NUMERIC_FEATURES),
-            ("categorical", categorical, CATEGORICAL_FEATURES),
-        ]
-    )
+    numeric = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    categorical = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ])
+    preprocessing = ColumnTransformer(transformers=[
+        ("numeric", numeric, NUMERIC_FEATURES),
+        ("categorical", categorical, CATEGORICAL_FEATURES),
+    ])
     classifier = LogisticRegression(
-        class_weight="balanced",
-        max_iter=2000,
-        random_state=42,
+        class_weight="balanced", max_iter=2000, random_state=42
     )
-    return Pipeline(
-        steps=[
-            ("preprocessing", preprocessing),
-            ("classifier", classifier),
-        ]
-    )
+    return Pipeline(steps=[
+        ("preprocessing", preprocessing),
+        ("classifier", classifier),
+    ])
 
 
 def train(dataset: pd.DataFrame) -> dict[str, Any]:
