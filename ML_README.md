@@ -18,8 +18,9 @@ d'entrée afin d'éviter toute fuite d'information.
 
 ## Source des données
 
-Le workflow lit directement les onglets `SIGNAUX` et `SUIVI` du Google Sheet,
-puis les fusionne avec `ID_SIGNAL`.
+Le workflow interroge le même Google Apps Script que l'agent de trading avec une
+action dédiée `export_ml`. L'Apps Script renvoie les onglets `SIGNAUX` et `SUIVI`,
+puis le pipeline les fusionne avec `ID_SIGNAL`.
 
 Variables principales : scores, variation de séance, EMA, VWAP, volume relatif,
 performance et surperformance CAC 40, momentum 15 min, RSI, ATR, gap, secteur,
@@ -27,16 +28,20 @@ contexte marché/secteur/news et heure du signal.
 
 ## Secrets GitHub nécessaires
 
-Dans `Settings > Secrets and variables > Actions`, créer :
+Aucun nouveau secret Google n'est nécessaire. Le workflow réutilise les secrets
+déjà employés par l'agent :
 
-- `ML_GOOGLE_SHEET_ID` : identifiant du classeur Google Sheet ;
-- `GOOGLE_SERVICE_ACCOUNT_JSON` : contenu JSON complet du compte de service
-  Google utilisé en lecture seule.
+- `GOOGLE_SHEETS_URL` ;
+- `GOOGLE_SHEETS_TOKEN`.
 
-Le Google Sheet doit être partagé avec l'adresse e-mail du compte de service,
-avec un accès Lecteur au minimum.
+Il n'est donc pas nécessaire d'utiliser Google Cloud Console, un compte de
+service ou un fichier JSON.
 
-Ne jamais ajouter le fichier JSON du compte de service dans le dépôt.
+## Modification Apps Script nécessaire
+
+Le Web App Apps Script doit accepter l'action `export_ml` après vérification du
+token et renvoyer les lignes des onglets `SIGNAUX` et `SUIVI` sous forme d'objets
+JSON. Cette lecture reste protégée par le même `SECRET_TOKEN` que les écritures.
 
 ## Entraînement
 
