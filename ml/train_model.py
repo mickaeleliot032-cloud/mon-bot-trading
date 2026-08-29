@@ -69,8 +69,6 @@ def _load_via_apps_script() -> tuple[pd.DataFrame, pd.DataFrame]:
             f"Réponse Apps Script inattendue : type={type(payload).__name__}."
         )
 
-    # Diagnostic volontairement limité aux noms de clés et aux types :
-    # aucune donnée du Sheet et aucun secret ne sont écrits dans les logs.
     key_types = {key: type(value).__name__ for key, value in payload.items()}
     print(f"Diagnostic Apps Script - clés/types reçus : {key_types}")
 
@@ -106,6 +104,12 @@ def _hour_to_decimal(value: Any) -> float:
     return float(parsed.hour + parsed.minute / 60 + parsed.second / 3600)
 
 
+def _clean_id_signal(frame: pd.DataFrame) -> pd.DataFrame:
+    frame = frame.copy()
+    frame["ID_SIGNAL"] = frame["ID_SIGNAL"].fillna("").astype(str).str.strip()
+    return frame[frame["ID_SIGNAL"] != ""].copy()
+
+
 def build_dataset(signals: pd.DataFrame, follow_up: pd.DataFrame) -> pd.DataFrame:
     required_signal = {"ID_SIGNAL", "DATE"}
     required_follow = {"ID_SIGNAL", "RANG_FIN_JOURNEE"}
@@ -116,11 +120,52 @@ def build_dataset(signals: pd.DataFrame, follow_up: pd.DataFrame) -> pd.DataFram
     if missing_follow:
         raise RuntimeError(f"Colonnes SUIVI manquantes : {sorted(missing_follow)}")
 
+    signals = _clean_id_signal(signals)
+    follow_up = _clean_id_signal(follow_up)
+
+    duplicate_signals = int(signals.duplicated("ID_SIGNAL", keep=False).sum())
+    duplicate_follow = int(follow_up.duplicated("ID_SIGNAL", keep=False).sum())
+    print(
+        "Doublons ID_SIGNAL détectés avant nettoyage : "
+        f"SIGNAUX={duplicate_signals}, SUIVI={duplicate_follow}."
+    )
+
+    # Dans SIGNAUX, plusieurs écritures du même signal peuvent provenir d'anciens
+    # essais du webhook. On conserve la dernière ligne du Sheet.
+    signals = signals.drop_duplicates("ID_SIGNAL", keep="last").copy()
+
+    # Dans SUIVI, on privilégie d'abord une ligne portant un rang de fin de journée
+    # exploitable, puis la dernière occurrence en cas d'égalité.
+    follow_up = follow_up.copy()
+    follow_up["_ROW_ORDER"] = np.arange(len(follow_up))
+    follow_up["_HAS_RANK"] = (
+        follow_up["RANG_FIN_JOURNEE"].fillna("").astype(str).str.strip() != ""
+    ).astype(int)
+    follow_up = (
+        follow_up.sort_values(["ID_SIGNAL", "_HAS_RANK", "_ROW_ORDER"])
+        .drop_duplicates("ID_SIGNAL", keep="last")
+        .drop(columns=["_ROW_ORDER", "_HAS_RANK"])
+    )
+
+    print(
+        "Après nettoyage : "
+        f"{len(signals)} ID_SIGNAL uniques dans SIGNAUX, "
+        f"{len(follow_up)} dans SUIVI."
+    )
+
     suivi_columns = ["ID_SIGNAL", "RANG_FIN_JOURNEE"]
     if "PERF_MAX_JOURNEE" in follow_up.columns:
         suivi_columns.append("PERF_MAX_JOURNEE")
     suivi = follow_up[suivi_columns].copy()
-    dataset = signals.merge(suivi, on="ID_SIGNAL", how="inner", validate="one_to_one")
+
+    dataset = signals.merge(
+        suivi,
+        on="ID_SIGNAL",
+        how="inner",
+        validate="one_to_one",
+    )
+    print(f"Fusion ML : {len(dataset)} signaux appariés par ID_SIGNAL.")
+
     dataset["RANG_FIN_JOURNEE"] = pd.to_numeric(
         dataset["RANG_FIN_JOURNEE"], errors="coerce"
     )
