@@ -29,6 +29,7 @@ jobs:
 
       - name: Entraîner et valider le modèle
         env:
+          PYTHONPATH: ${{ github.workspace }}
           GOOGLE_SHEETS_URL: ${{ secrets.GOOGLE_SHEETS_URL }}
           GOOGLE_SHEETS_TOKEN: ${{ secrets.GOOGLE_SHEETS_TOKEN }}
           ML_MIN_ROWS: "60"
