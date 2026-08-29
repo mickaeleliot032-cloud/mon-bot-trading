@@ -7,11 +7,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-import gspread
 import joblib
 import numpy as np
 import pandas as pd
-from google.oauth2.service_account import Credentials
+import requests
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -60,26 +59,39 @@ def _normalize_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def _load_credentials() -> Credentials:
-    raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-    if not raw:
-        raise RuntimeError("Secret GOOGLE_SERVICE_ACCOUNT_JSON absent.")
+def _load_via_apps_script() -> tuple[pd.DataFrame, pd.DataFrame]:
+    url = os.environ.get("GOOGLE_SHEETS_URL", "").strip()
+    token = os.environ.get("GOOGLE_SHEETS_TOKEN", "").strip()
+    if not url:
+        raise RuntimeError("Secret GOOGLE_SHEETS_URL absent.")
+    if not token:
+        raise RuntimeError("Secret GOOGLE_SHEETS_TOKEN absent.")
+
+    response = requests.post(
+        url,
+        json={"token": token, "action": "export_ml"},
+        timeout=60,
+    )
+    response.raise_for_status()
     try:
-        info = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON n'est pas un JSON valide.") from exc
+        payload = response.json()
+    except requests.JSONDecodeError as exc:
+        raise RuntimeError("Réponse Apps Script non JSON.") from exc
 
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
-        "https://www.googleapis.com/auth/drive.readonly",
-    ]
-    return Credentials.from_service_account_info(info, scopes=scopes)
+    if not payload.get("success"):
+        raise RuntimeError(
+            f"Export Apps Script refusé : {payload.get('error', 'erreur inconnue')}"
+        )
 
+    signals = payload.get("signaux")
+    follow_up = payload.get("suivi")
+    if not isinstance(signals, list) or not isinstance(follow_up, list):
+        raise RuntimeError("Export Apps Script incomplet : signaux/suivi absents.")
 
-def _load_worksheet(client: gspread.Client, sheet_id: str, name: str) -> pd.DataFrame:
-    worksheet = client.open_by_key(sheet_id).worksheet(name)
-    rows = worksheet.get_all_records(default_blank="")
-    return _normalize_columns(pd.DataFrame(rows))
+    return (
+        _normalize_columns(pd.DataFrame(signals)),
+        _normalize_columns(pd.DataFrame(follow_up)),
+    )
 
 
 def _hour_to_decimal(value: Any) -> float:
@@ -102,7 +114,10 @@ def build_dataset(signals: pd.DataFrame, follow_up: pd.DataFrame) -> pd.DataFram
     if missing_follow:
         raise RuntimeError(f"Colonnes SUIVI manquantes : {sorted(missing_follow)}")
 
-    suivi = follow_up[["ID_SIGNAL", "RANG_FIN_JOURNEE", "PERF_MAX_JOURNEE"]].copy()
+    suivi_columns = ["ID_SIGNAL", "RANG_FIN_JOURNEE"]
+    if "PERF_MAX_JOURNEE" in follow_up.columns:
+        suivi_columns.append("PERF_MAX_JOURNEE")
+    suivi = follow_up[suivi_columns].copy()
     dataset = signals.merge(suivi, on="ID_SIGNAL", how="inner", validate="one_to_one")
     dataset["RANG_FIN_JOURNEE"] = pd.to_numeric(
         dataset["RANG_FIN_JOURNEE"], errors="coerce"
@@ -238,13 +253,7 @@ def train(dataset: pd.DataFrame) -> dict[str, Any]:
 
 
 def main() -> None:
-    sheet_id = os.environ.get("ML_GOOGLE_SHEET_ID", "").strip()
-    if not sheet_id:
-        raise RuntimeError("Secret ML_GOOGLE_SHEET_ID absent.")
-
-    client = gspread.authorize(_load_credentials())
-    signals = _load_worksheet(client, sheet_id, "SIGNAUX")
-    follow_up = _load_worksheet(client, sheet_id, "SUIVI")
+    signals, follow_up = _load_via_apps_script()
     dataset = build_dataset(signals, follow_up)
     metrics = train(dataset)
     print(json.dumps(metrics, indent=2, ensure_ascii=False))
