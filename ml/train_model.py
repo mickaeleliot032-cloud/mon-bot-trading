@@ -11,6 +11,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import requests
+import yfinance as yf
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -23,6 +24,8 @@ from sklearn.metrics import (
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+from trading_bot.universe import CAC40
 
 OUTPUT_DIR = Path("data/ml")
 MODEL_PATH = OUTPUT_DIR / "top3_model.joblib"
@@ -110,6 +113,124 @@ def _clean_id_signal(frame: pd.DataFrame) -> pd.DataFrame:
     return frame[frame["ID_SIGNAL"] != ""].copy()
 
 
+def _extract_daily_field(data: pd.DataFrame, field: str, ticker: str) -> pd.Series:
+    if isinstance(data.columns, pd.MultiIndex):
+        if (field, ticker) in data.columns:
+            return data[(field, ticker)]
+        if (ticker, field) in data.columns:
+            return data[(ticker, field)]
+        return pd.Series(dtype=float)
+    if field in data.columns and len(CAC40) == 1:
+        return data[field]
+    return pd.Series(dtype=float)
+
+
+def _build_historical_rank_lookup(dates: list[pd.Timestamp]) -> dict[tuple[str, str], dict[str, float]]:
+    if not dates:
+        return {}
+
+    normalized_dates = sorted({pd.Timestamp(date).normalize() for date in dates})
+    start = normalized_dates[0] - pd.Timedelta(days=3)
+    end = normalized_dates[-1] + pd.Timedelta(days=4)
+    tickers = [instrument.ticker for instrument in CAC40]
+
+    print(
+        "Backfill Yahoo Finance : "
+        f"{len(normalized_dates)} journées à recalculer sur {len(tickers)} valeurs CAC40."
+    )
+    data = yf.download(
+        tickers=tickers,
+        start=start.date().isoformat(),
+        end=end.date().isoformat(),
+        interval="1d",
+        group_by="column",
+        auto_adjust=False,
+        progress=False,
+        threads=True,
+    )
+    if data.empty:
+        print("Backfill Yahoo Finance : aucune donnée reçue.")
+        return {}
+
+    lookup: dict[tuple[str, str], dict[str, float]] = {}
+    wanted_dates = {date.date() for date in normalized_dates}
+    for day in sorted({pd.Timestamp(index).date() for index in data.index}):
+        if day not in wanted_dates:
+            continue
+        ranking: list[tuple[str, float]] = []
+        for ticker in tickers:
+            open_series = _extract_daily_field(data, "Open", ticker)
+            high_series = _extract_daily_field(data, "High", ticker)
+            if open_series.empty or high_series.empty:
+                continue
+            matching = [idx for idx in open_series.index if pd.Timestamp(idx).date() == day]
+            if not matching:
+                continue
+            idx = matching[0]
+            open_price = pd.to_numeric(pd.Series([open_series.loc[idx]]), errors="coerce").iloc[0]
+            high_price = pd.to_numeric(pd.Series([high_series.loc[idx]]), errors="coerce").iloc[0]
+            if pd.isna(open_price) or pd.isna(high_price) or float(open_price) <= 0:
+                continue
+            perf_max = (float(high_price) / float(open_price) - 1.0) * 100.0
+            ranking.append((ticker, perf_max))
+
+        ranking.sort(key=lambda item: item[1], reverse=True)
+        for rank, (ticker, perf_max) in enumerate(ranking, start=1):
+            lookup[(day.isoformat(), ticker)] = {
+                "rank": float(rank),
+                "perf_max": round(float(perf_max), 3),
+            }
+
+    print(f"Backfill Yahoo Finance : {len(lookup)} couples date/ticker calculés.")
+    return lookup
+
+
+def _backfill_missing_labels(dataset: pd.DataFrame) -> pd.DataFrame:
+    dataset = dataset.copy()
+    dataset["DATE"] = pd.to_datetime(dataset["DATE"], errors="coerce")
+    dataset["RANG_FIN_JOURNEE"] = pd.to_numeric(
+        dataset["RANG_FIN_JOURNEE"], errors="coerce"
+    )
+    if "PERF_MAX_JOURNEE" not in dataset.columns:
+        dataset["PERF_MAX_JOURNEE"] = np.nan
+    dataset["PERF_MAX_JOURNEE"] = pd.to_numeric(
+        dataset["PERF_MAX_JOURNEE"], errors="coerce"
+    )
+
+    ticker_column = next(
+        (column for column in ("TICKER", "SYMBOLE", "SYMBOL") if column in dataset.columns),
+        None,
+    )
+    if ticker_column is None:
+        raise RuntimeError(
+            "Backfill impossible : aucune colonne TICKER/SYMBOLE/SYMBOL dans SIGNAUX."
+        )
+
+    missing_mask = dataset["RANG_FIN_JOURNEE"].isna() & dataset["DATE"].notna()
+    if not missing_mask.any():
+        print("Backfill : aucun rang manquant.")
+        return dataset
+
+    lookup = _build_historical_rank_lookup(dataset.loc[missing_mask, "DATE"].tolist())
+    filled = 0
+    for index in dataset.index[missing_mask]:
+        day = dataset.at[index, "DATE"]
+        ticker = str(dataset.at[index, ticker_column]).strip()
+        key = (day.date().isoformat(), ticker)
+        values = lookup.get(key)
+        if values is None:
+            continue
+        dataset.at[index, "RANG_FIN_JOURNEE"] = values["rank"]
+        if pd.isna(dataset.at[index, "PERF_MAX_JOURNEE"]):
+            dataset.at[index, "PERF_MAX_JOURNEE"] = values["perf_max"]
+        filled += 1
+
+    print(
+        f"Backfill : {filled} rangs historiques ajoutés sur {int(missing_mask.sum())} manquants."
+    )
+    return dataset
+
+
 def build_dataset(signals: pd.DataFrame, follow_up: pd.DataFrame) -> pd.DataFrame:
     required_signal = {"ID_SIGNAL", "DATE"}
     required_follow = {"ID_SIGNAL", "RANG_FIN_JOURNEE"}
@@ -130,12 +251,7 @@ def build_dataset(signals: pd.DataFrame, follow_up: pd.DataFrame) -> pd.DataFram
         f"SIGNAUX={duplicate_signals}, SUIVI={duplicate_follow}."
     )
 
-    # Dans SIGNAUX, plusieurs écritures du même signal peuvent provenir d'anciens
-    # essais du webhook. On conserve la dernière ligne du Sheet.
     signals = signals.drop_duplicates("ID_SIGNAL", keep="last").copy()
-
-    # Dans SUIVI, on privilégie d'abord une ligne portant un rang de fin de journée
-    # exploitable, puis la dernière occurrence en cas d'égalité.
     follow_up = follow_up.copy()
     follow_up["_ROW_ORDER"] = np.arange(len(follow_up))
     follow_up["_HAS_RANK"] = (
@@ -166,9 +282,7 @@ def build_dataset(signals: pd.DataFrame, follow_up: pd.DataFrame) -> pd.DataFram
     )
     print(f"Fusion ML : {len(dataset)} signaux appariés par ID_SIGNAL.")
 
-    dataset["RANG_FIN_JOURNEE"] = pd.to_numeric(
-        dataset["RANG_FIN_JOURNEE"], errors="coerce"
-    )
+    dataset = _backfill_missing_labels(dataset)
     dataset = dataset.dropna(subset=["RANG_FIN_JOURNEE"]).copy()
     dataset[TARGET_COLUMN] = (dataset["RANG_FIN_JOURNEE"] <= 3).astype(int)
 
@@ -189,6 +303,10 @@ def build_dataset(signals: pd.DataFrame, follow_up: pd.DataFrame) -> pd.DataFram
             dataset[column] = ""
         dataset[column] = dataset[column].fillna("").astype(str)
 
+    print(
+        "Dataset ML final : "
+        f"{len(dataset)} lignes, {int(dataset[TARGET_COLUMN].sum())} Top3."
+    )
     return dataset.reset_index(drop=True)
 
 
