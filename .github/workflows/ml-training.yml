@@ -29,8 +29,8 @@ jobs:
 
       - name: Entraîner et valider le modèle
         env:
-          ML_GOOGLE_SHEET_ID: ${{ secrets.ML_GOOGLE_SHEET_ID }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEETS_URL: ${{ secrets.GOOGLE_SHEETS_URL }}
+          GOOGLE_SHEETS_TOKEN: ${{ secrets.GOOGLE_SHEETS_TOKEN }}
           ML_MIN_ROWS: "60"
           ML_MIN_TOP3: "5"
         run: python ml/train_model.py
