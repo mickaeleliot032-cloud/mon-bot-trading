@@ -151,6 +151,21 @@ class GoogleSheetsWebhook:
                     ),
                     "decision": cls._first(payload, "decision", "eligible"),
                     "motifs": cls._first(payload, "motifs", "reasons"),
+                    # Variables ML : mapping explicite pour garantir leur
+                    # transmission à Code.gs et éviter toute perte lors d'une
+                    # évolution future du format du payload.
+                    "perf_cac40": cls._first(payload, "perf_cac40"),
+                    "surperf_cac40": cls._first(payload, "surperf_cac40"),
+                    "momentum_15m": cls._first(payload, "momentum_15m"),
+                    "rsi14": cls._first(payload, "rsi14"),
+                    "atr_pct": cls._first(payload, "atr_pct"),
+                    "gap_pct": cls._first(payload, "gap_pct"),
+                    "secteur": cls._first(payload, "secteur", "sector"),
+                    "score_marche": cls._first(payload, "score_marche", "market"),
+                    "score_secteur": cls._first(
+                        payload, "score_secteur", "sector_score"
+                    ),
+                    "score_news": cls._first(payload, "score_news", "news"),
                 }
             )
 
@@ -214,6 +229,8 @@ class GoogleSheetsWebhook:
                     "tp_atteint": cls._first(payload, "tp_atteint"),
                     "sl_atteint": cls._first(payload, "sl_atteint"),
                     "premier_niveau": cls._first(payload, "premier_niveau", "level"),
+                    "rang_fin_journee": cls._first(payload, "rang_fin_journee"),
+                    "perf_max_journee": cls._first(payload, "perf_max_journee"),
                 }
             )
 
