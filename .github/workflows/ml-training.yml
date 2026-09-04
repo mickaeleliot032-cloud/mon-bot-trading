@@ -1,4 +1,4 @@
-name: Entraînement ML Top 3
+name: Entraînement ML Top 3 + potentiel restant
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
       - name: Installer les dépendances ML
         run: pip install --requirement requirements-ml.txt
 
-      - name: Entraîner et valider le modèle
+      - name: Entraîner et valider le modèle Top 3
         env:
           PYTHONPATH: ${{ github.workspace }}
           GOOGLE_SHEETS_URL: ${{ secrets.GOOGLE_SHEETS_URL }}
@@ -36,14 +36,27 @@ jobs:
           ML_MIN_TOP3: "5"
         run: python ml/train_model.py
 
-      - name: Publier le modèle et le rapport
+      - name: Entraîner le modèle de potentiel restant
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          GOOGLE_SHEETS_URL: ${{ secrets.GOOGLE_SHEETS_URL }}
+          GOOGLE_SHEETS_TOKEN: ${{ secrets.GOOGLE_SHEETS_TOKEN }}
+          ML_MIN_REMAINING_ROWS: "60"
+          ML_MIN_REMAINING_CLASS: "5"
+          ML_REMAINING_POTENTIAL_THRESHOLD: "1.0"
+        run: python ml/train_remaining_potential.py
+
+      - name: Publier les modèles et rapports
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: modele-top3-${{ github.run_number }}
+          name: modeles-ml-${{ github.run_number }}
           path: |
             data/ml/top3_model.joblib
             data/ml/metrics.json
             data/ml/dataset.csv
+            data/ml/remaining_potential_model.joblib
+            data/ml/remaining_potential_metrics.json
+            data/ml/remaining_potential_dataset.csv
           if-no-files-found: error
           retention-days: 90
