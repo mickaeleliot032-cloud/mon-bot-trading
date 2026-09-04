@@ -231,6 +231,26 @@ class GoogleSheetsWebhook:
                     "premier_niveau": cls._first(payload, "premier_niveau", "level"),
                     "rang_fin_journee": cls._first(payload, "rang_fin_journee"),
                     "perf_max_journee": cls._first(payload, "perf_max_journee"),
+                    # Variables de timing intraday ajoutées pour tester
+                    # l'hypothèse d'une détection trop tardive du mouvement.
+                    "prix_ouverture": cls._first(payload, "prix_ouverture"),
+                    "perf_ouv_signal": cls._first(payload, "perf_ouv_signal"),
+                    "plus_haut_avant_signal": cls._first(
+                        payload, "plus_haut_avant_signal"
+                    ),
+                    "perf_max_avant_signal": cls._first(
+                        payload, "perf_max_avant_signal"
+                    ),
+                    "plus_haut_apres_signal": cls._first(
+                        payload, "plus_haut_apres_signal"
+                    ),
+                    "perf_max_apres_signal": cls._first(
+                        payload, "perf_max_apres_signal"
+                    ),
+                    "heure_plus_haut": cls._first(payload, "heure_plus_haut"),
+                    "mouvement_consomme_pct": cls._first(
+                        payload, "mouvement_consomme_pct"
+                    ),
                 }
             )
 
