@@ -111,9 +111,9 @@ class TradingEngineV43(TradingEngineV42):
         self.google_sheets.send("alert", **event)
 
     def _finalize_signal_tracking(self, now: datetime) -> None:
-        """Ajoute au suivi le rang CAC40 et la perf max de la journée.
+        """Ajoute au suivi le rang CAC40 et les variables de timing intraday.
 
-        Ces deux informations sont calculées une seule fois, juste avant le bilan
+        Ces informations sont calculées une seule fois, juste avant le bilan
         journalier, puis injectées dans chaque ligne SUIVI produite par V4.2.
         Elles n'interviennent jamais dans le scoring ni dans la décision de trade.
         """
@@ -194,6 +194,115 @@ class TradingEngineV43(TradingEngineV42):
         daily = getattr(self, "_daily_ml_ranking_cache", {}).get(item["ticker"], {})
         payload["rang_fin_journee"] = daily.get("rang_fin_journee", "")
         payload["perf_max_journee"] = daily.get("perf_max_journee", "")
+
+        # Les nouvelles variables sont purement analytiques. Elles permettent de
+        # mesurer si le moteur détecte une action avant ou après l'essentiel de
+        # son mouvement haussier journalier.
+        if frame is None or frame.empty:
+            return payload
+
+        try:
+            signal_time = datetime.fromisoformat(item["signal_time"]).astimezone(
+                self.timezone
+            )
+            signal_price = float(item["price_signal"])
+            session = frame.loc[frame.index.date == signal_time.date()].copy()
+            if session.empty or signal_price <= 0:
+                return payload
+
+            opens = (
+                pd.to_numeric(session["Open"], errors="coerce").dropna()
+                if "Open" in session
+                else pd.Series(dtype=float)
+            )
+            highs = (
+                pd.to_numeric(session["High"], errors="coerce").dropna()
+                if "High" in session
+                else pd.Series(dtype=float)
+            )
+            if opens.empty or highs.empty:
+                return payload
+
+            open_price = float(opens.iloc[0])
+            if open_price <= 0:
+                return payload
+
+            # Une bougie 1 minute est horodatée au début de sa minute. Pour
+            # PLUS_HAUT_AVANT_SIGNAL, on exclut volontairement la minute du
+            # signal afin de ne pas utiliser un plus haut éventuellement atteint
+            # quelques secondes après le déclenchement du signal.
+            signal_minute = signal_time.replace(second=0, microsecond=0)
+            before = session.loc[session.index < signal_minute]
+            after = session.loc[session.index >= signal_time]
+
+            before_highs = (
+                pd.to_numeric(before["High"], errors="coerce").dropna()
+                if not before.empty and "High" in before
+                else pd.Series(dtype=float)
+            )
+            after_highs = (
+                pd.to_numeric(after["High"], errors="coerce").dropna()
+                if not after.empty and "High" in after
+                else pd.Series(dtype=float)
+            )
+
+            plus_haut_avant = (
+                float(before_highs.max()) if not before_highs.empty else open_price
+            )
+            plus_haut_apres = (
+                float(after_highs.max()) if not after_highs.empty else ""
+            )
+            daily_high = float(highs.max())
+            high_time = highs.idxmax()
+
+            perf_ouv_signal = (signal_price / open_price - 1) * 100
+            perf_max_avant = (plus_haut_avant / open_price - 1) * 100
+            perf_max_apres: float | str = ""
+            if plus_haut_apres != "":
+                perf_max_apres = (float(plus_haut_apres) / signal_price - 1) * 100
+
+            # On calcule ici le mouvement journalier sur les mêmes données 1 min
+            # que les variables avant/après signal. Cela évite un ratio incohérent
+            # si le cache CAC40 de fin de journée provient d'une série 5 minutes.
+            perf_max_journee_1m = (daily_high / open_price - 1) * 100
+            mouvement_consomme: float | str = ""
+            if perf_max_journee_1m > 0:
+                mouvement_consomme = min(
+                    100.0,
+                    max(0.0, perf_max_avant) / perf_max_journee_1m * 100,
+                )
+
+            payload.update(
+                {
+                    "prix_ouverture": round(open_price, 4),
+                    "perf_ouv_signal": round(perf_ouv_signal, 3),
+                    "plus_haut_avant_signal": round(plus_haut_avant, 4),
+                    "perf_max_avant_signal": round(perf_max_avant, 3),
+                    "plus_haut_apres_signal": (
+                        round(float(plus_haut_apres), 4)
+                        if plus_haut_apres != ""
+                        else ""
+                    ),
+                    "perf_max_apres_signal": (
+                        round(float(perf_max_apres), 3)
+                        if perf_max_apres != ""
+                        else ""
+                    ),
+                    "heure_plus_haut": high_time.strftime("%H:%M:%S"),
+                    "mouvement_consomme_pct": (
+                        round(float(mouvement_consomme), 1)
+                        if mouvement_consomme != ""
+                        else ""
+                    ),
+                }
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Variables ML intraday non calculables pour %s : %s",
+                item.get("ticker", "?"),
+                exc,
+            )
+
         return payload
 
     def _open_position(self, now: datetime, score: Score) -> None:
