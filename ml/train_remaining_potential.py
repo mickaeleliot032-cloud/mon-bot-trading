@@ -20,7 +20,13 @@ import requests
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, brier_score_loss, precision_score, recall_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    brier_score_loss,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -29,7 +35,9 @@ MODEL_PATH = OUTPUT_DIR / "remaining_potential_model.joblib"
 METRICS_PATH = OUTPUT_DIR / "remaining_potential_metrics.json"
 DATASET_PATH = OUTPUT_DIR / "remaining_potential_dataset.csv"
 
-TARGET_THRESHOLD_PCT = float(os.environ.get("ML_REMAINING_POTENTIAL_THRESHOLD", "1.0"))
+TARGET_THRESHOLD_PCT = float(
+    os.environ.get("ML_REMAINING_POTENTIAL_THRESHOLD", "1.0")
+)
 TARGET_COLUMN = "POTENTIEL_RESTANT_1PCT"
 
 # Uniquement des informations disponibles au moment du signal.
@@ -93,16 +101,21 @@ def _load_via_apps_script() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict) or not payload.get("success"):
-        raise RuntimeError(
-            f"Export Apps Script refusé : {payload.get('error', 'réponse invalide') if isinstance(payload, dict) else 'réponse invalide'}"
+        error = (
+            payload.get("error", "réponse invalide")
+            if isinstance(payload, dict)
+            else "réponse invalide"
         )
+        raise RuntimeError(f"Export Apps Script refusé : {error}")
 
     signals = payload.get("signaux", [])
     follow_up = payload.get("suivi", [])
     trades = payload.get("trades", [])
 
     if not isinstance(signals, list) or not isinstance(follow_up, list):
-        raise RuntimeError("Export Apps Script incomplet : SIGNAUX/SUIVI absents ou invalides.")
+        raise RuntimeError(
+            "Export Apps Script incomplet : SIGNAUX/SUIVI absents ou invalides."
+        )
     if not isinstance(trades, list):
         trades = []
 
@@ -112,8 +125,9 @@ def _load_via_apps_script() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     )
     if not trades:
         print(
-            "Information : l'onglet TRADES n'est pas actuellement fourni par export_ml. "
-            "Il n'est pas utilisé comme feature afin d'éviter une fuite d'information post-trade."
+            "Information : l'onglet TRADES n'est pas actuellement fourni "
+            "par export_ml. Il n'est pas utilisé comme feature afin d'éviter "
+            "une fuite d'information post-trade."
         )
 
     return (
@@ -149,7 +163,8 @@ def build_dataset(signals: pd.DataFrame, follow_up: pd.DataFrame) -> pd.DataFram
         raise RuntimeError(f"Colonnes SIGNAUX manquantes : {sorted(missing_signal)}")
     if missing_follow:
         raise RuntimeError(
-            "Les nouvelles colonnes de SUIVI ne sont pas encore disponibles dans l'export : "
+            "Les nouvelles colonnes de SUIVI ne sont pas encore disponibles "
+            "dans l'export : "
             f"{sorted(missing_follow)}"
         )
 
@@ -264,7 +279,11 @@ def train_or_report(dataset: pd.DataFrame) -> dict[str, Any]:
         "rows_total": int(len(dataset)),
         "positive_total": positives,
         "negative_total": negatives,
-        "positive_rate": round(float(dataset[TARGET_COLUMN].mean()), 4) if len(dataset) else None,
+        "positive_rate": (
+            round(float(dataset[TARGET_COLUMN].mean()), 4)
+            if len(dataset)
+            else None
+        ),
         "feature_columns": NUMERIC_FEATURES + CATEGORICAL_FEATURES,
         "future_columns_excluded_from_features": OUTCOME_COLUMNS,
         "status": "waiting_for_data",
@@ -293,8 +312,15 @@ def train_or_report(dataset: pd.DataFrame) -> dict[str, Any]:
             "rows_validation": int(len(validation_set)),
             "days_total": int(dataset["DATE"].dt.date.nunique()),
             "accuracy": round(float(accuracy_score(y_true, predictions)), 4),
-            "precision": round(float(precision_score(y_true, predictions, zero_division=0)), 4),
-            "recall": round(float(recall_score(y_true, predictions, zero_division=0)), 4),
+            "precision": round(
+                float(
+                    precision_score(y_true, predictions, zero_division=0)
+                ),
+                4,
+            ),
+            "recall": round(
+                float(recall_score(y_true, predictions, zero_division=0)), 4
+            ),
             "brier": round(float(brier_score_loss(y_true, probabilities)), 4),
             "roc_auc": round(float(roc_auc_score(y_true, probabilities)), 4)
             if len(np.unique(y_true)) > 1
@@ -329,13 +355,19 @@ def main() -> None:
             "reason": str(exc),
             "target": f"PERF_MAX_APRES_SIGNAL >= {TARGET_THRESHOLD_PCT:.2f}%",
         }
-        METRICS_PATH.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+        METRICS_PATH.write_text(
+            json.dumps(metrics, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
         print(metrics["reason"])
         return
 
     dataset.to_csv(DATASET_PATH, index=False)
     metrics = train_or_report(dataset)
-    METRICS_PATH.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+    METRICS_PATH.write_text(
+        json.dumps(metrics, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     print(json.dumps(metrics, indent=2, ensure_ascii=False))
 
 

@@ -263,6 +263,15 @@ class TradingEngine:
         ranking.sort(key=lambda item: item.final, reverse=True)
         self._remember_ranking(ranking)
 
+        # Hook analytique optionnel. Les versions enrichies peuvent calculer un
+        # classement ML shadow sans modifier l'ordre ni la décision du moteur.
+        prepare_shadow = getattr(self, "_prepare_shadow_ml", None)
+        if callable(prepare_shadow) and ranking:
+            try:
+                prepare_shadow(ranking, now, market_return)
+            except Exception:
+                LOGGER.exception("Préparation ML shadow non bloquante impossible.")
+
         if not ranking:
             LOGGER.warning("Aucune action exploitable pendant ce scan.")
             return ranking

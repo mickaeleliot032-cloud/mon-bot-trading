@@ -166,6 +166,16 @@ class GoogleSheetsWebhook:
                         payload, "score_secteur", "sector_score"
                     ),
                     "score_news": cls._first(payload, "score_news", "news"),
+                    "proba_top3_ml": cls._first(payload, "proba_top3_ml"),
+                    "proba_potentiel_1pct_ml": cls._first(
+                        payload, "proba_potentiel_1pct_ml"
+                    ),
+                    "score_ml_combine": cls._first(payload, "score_ml_combine"),
+                    "rang_ml": cls._first(payload, "rang_ml"),
+                    "choix_ml": cls._first(payload, "choix_ml"),
+                    "choix_agent": cls._first(payload, "choix_agent"),
+                    "ml_accord_agent": cls._first(payload, "ml_accord_agent"),
+                    "resultat_choix_ml": cls._first(payload, "resultat_choix_ml"),
                 }
             )
 

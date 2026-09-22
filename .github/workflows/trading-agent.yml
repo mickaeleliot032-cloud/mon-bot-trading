@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: trading-agent-v4
@@ -70,8 +71,54 @@ jobs:
           restore-keys: |
             trading-state-v4-
 
+      - name: Restaurer les derniers modèles ML
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/actions/artifacts?per_page=100",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              artifacts = json.load(response).get("artifacts", [])
+          candidates = [
+              item for item in artifacts
+              if item.get("name", "").startswith("modeles-ml-")
+              and not item.get("expired", False)
+          ]
+          candidates.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+          if not candidates:
+              print("Aucun artefact ML disponible : shadow mode désactivé pour ce passage.")
+              raise SystemExit(0)
+          artifact = candidates[0]
+          Path("/tmp/ml_artifact_id").write_text(str(artifact["id"]))
+          print(f"Artefact ML sélectionné : {artifact['name']} ({artifact['id']})")
+          PY
+          if [ -f /tmp/ml_artifact_id ]; then
+            ARTIFACT_ID="$(cat /tmp/ml_artifact_id)"
+            curl --fail --location --silent --show-error \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+              --output /tmp/ml.zip
+            unzip -o /tmp/ml.zip -d .
+          fi
+
       - name: Installer les dépendances
-        run: pip install --requirement requirements.txt
+        run: |
+          pip install --requirement requirements.txt
+          pip install --requirement requirements-ml.txt
 
       - name: Exécuter le passage planifié
         env:

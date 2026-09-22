@@ -11,6 +11,7 @@ import pandas as pd
 from trading_bot.engine import TradingEngine
 from trading_bot.engine_v42 import TradingEngineV42
 from trading_bot.indicators import build_snapshot
+from trading_bot.ml_shadow import MLShadowScorer
 from trading_bot.scoring import Score
 from trading_bot.universe import CAC40
 
@@ -19,6 +20,138 @@ LOGGER = logging.getLogger(__name__)
 
 class TradingEngineV43(TradingEngineV42):
     """Conserve le scoring V4.2 mais enrichit la collecte pour le futur ML."""
+
+    def _prepare_shadow_ml(
+        self, ranking: list[Score], now: datetime, market_return: float
+    ) -> None:
+        """Classe les candidats avec les modèles ML sans influencer le trade réel."""
+
+        scorer = getattr(self, "_ml_shadow_scorer", None)
+        if scorer is None:
+            scorer = MLShadowScorer()
+            self._ml_shadow_scorer = scorer
+        self._ml_shadow_current = {}
+        if not scorer.enabled:
+            LOGGER.info("ML shadow : aucun modèle disponible pour ce passage.")
+            return
+
+        # Une seule requête 1 minute pour tous les candidats afin de reconstruire
+        # les quatre variables de timing disponibles au moment du signal.
+        minute_frames: dict[str, pd.DataFrame] = {}
+        try:
+            minute_frames = self.market_data.download_universe(
+                [item.ticker for item in ranking], period="1d", interval="1m"
+            )
+        except Exception as exc:
+            LOGGER.warning("Données 1 min ML shadow indisponibles : %s", exc)
+
+        rows: list[tuple[Score, dict[str, float | str]]] = []
+        signal_minute = now.replace(second=0, microsecond=0)
+        heure_decimale = now.hour + now.minute / 60 + now.second / 3600
+
+        for item in ranking:
+            snap = item.snapshot
+            open_price: float | str = ""
+            high_before: float | str = ""
+            perf_open_signal: float | str = ""
+            perf_max_before: float | str = ""
+            frame = minute_frames.get(item.ticker)
+            if frame is not None and not frame.empty:
+                try:
+                    localized = self._localize_market_frame(frame)
+                    session = localized.loc[localized.index.date == now.date()]
+                    opens = pd.to_numeric(session["Open"], errors="coerce").dropna()
+                    before = session.loc[session.index < signal_minute]
+                    highs = pd.to_numeric(before["High"], errors="coerce").dropna()
+                    if not opens.empty:
+                        open_price = float(opens.iloc[0])
+                        signal_price = float(snap["price"])
+                        if open_price > 0:
+                            perf_open_signal = (signal_price / open_price - 1) * 100
+                            high_before = (
+                                float(highs.max()) if not highs.empty else open_price
+                            )
+                            perf_max_before = (
+                                float(high_before) / open_price - 1
+                            ) * 100
+                except Exception as exc:
+                    LOGGER.debug(
+                        "Timing ML indisponible pour %s : %s",
+                        item.ticker,
+                        exc,
+                    )
+
+            features = {
+                "SCORE_GLOBAL": item.final,
+                "SCORE_QUANTITATIF": item.quantitative,
+                "PRIX": snap.get("price", ""),
+                "VARIATION_SEANCE": snap.get("return_open_pct", ""),
+                "EMA20": snap.get("ema20", ""),
+                "EMA50": snap.get("ema50", ""),
+                "VWAP": snap.get("vwap", ""),
+                "VOLUME_RELATIF": snap.get("volume_ratio", ""),
+                "PERF_CAC40": market_return,
+                "SURPERF_CAC40": (
+                    float(snap.get("return_open_pct", 0)) - market_return
+                ),
+                "MOMENTUM_15M": snap.get("momentum_15m_pct", ""),
+                "RSI14": snap.get("rsi14", ""),
+                "ATR_PCT": snap.get("atr_pct", ""),
+                "GAP_PCT": snap.get("gap_pct", ""),
+                "SCORE_MARCHE": item.market,
+                "SCORE_SECTEUR": item.sector_score,
+                "SCORE_NEWS": item.news,
+                "HEURE_DECIMALE": heure_decimale,
+                "PRIX_OUVERTURE": open_price,
+                "PERF_OUV_SIGNAL": perf_open_signal,
+                "PLUS_HAUT_AVANT_SIGNAL": high_before,
+                "PERF_MAX_AVANT_SIGNAL": perf_max_before,
+                "NIVEAU": item.level,
+                "SECTEUR": item.sector,
+            }
+            prediction = scorer.predict(features)
+            rows.append((item, prediction))
+
+        valid = [
+            (item, pred)
+            for item, pred in rows
+            if pred.get("score_ml_combine", "") != ""
+        ]
+        valid.sort(
+            key=lambda pair: float(pair[1]["score_ml_combine"]), reverse=True
+        )
+        ml_choice = valid[0][0] if valid else None
+        rank_by_ticker = {
+            item.ticker: rank for rank, (item, _pred) in enumerate(valid, start=1)
+        }
+
+        agent_choice = ranking[0]
+        for item, prediction in rows:
+            self._ml_shadow_current[item.ticker] = {
+                **prediction,
+                "rang_ml": rank_by_ticker.get(item.ticker, ""),
+                "choix_ml": ml_choice.name if ml_choice else "",
+                "choix_agent": agent_choice.name,
+                "ml_accord_agent": (
+                    "OUI"
+                    if ml_choice is not None and ml_choice.ticker == agent_choice.ticker
+                    else "NON" if ml_choice is not None else ""
+                ),
+                "resultat_choix_ml": "",
+            }
+
+        if ml_choice is not None:
+            LOGGER.info(
+                "ML shadow : choix=%s, score=%.2f, choix agent=%s "
+                "(aucun impact sur le trade).",
+                ml_choice.name,
+                float(
+                    self._ml_shadow_current[ml_choice.ticker][
+                        "score_ml_combine"
+                    ]
+                ),
+                agent_choice.name,
+            )
 
     def _notify_level_change(self, leader: Score) -> None:
         """Journalise un signal enrichi sans modifier la logique de trading."""
@@ -100,6 +233,9 @@ class TradingEngineV43(TradingEngineV42):
             "score_marche": round(float(leader.market), 2),
             "score_secteur": round(float(leader.sector_score), 2),
             "score_news": round(float(leader.news), 2),
+            # Shadow mode : ces champs sont purement analytiques et n'entrent
+            # jamais dans la décision d'ouverture de position.
+            **getattr(self, "_ml_shadow_current", {}).get(leader.ticker, {}),
         }
         self.state.setdefault("alert_history", []).append(event)
         self.state["alert_history"] = self.state["alert_history"][-80:]
