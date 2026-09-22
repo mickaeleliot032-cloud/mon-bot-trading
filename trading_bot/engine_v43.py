@@ -75,7 +75,11 @@ class TradingEngineV43(TradingEngineV42):
                                 float(high_before) / open_price - 1
                             ) * 100
                 except Exception as exc:
-                    LOGGER.debug("Timing ML indisponible pour %s : %s", item.ticker, exc)
+                    LOGGER.debug(
+                        "Timing ML indisponible pour %s : %s",
+                        item.ticker,
+                        exc,
+                    )
 
             features = {
                 "SCORE_GLOBAL": item.final,
@@ -87,7 +91,9 @@ class TradingEngineV43(TradingEngineV42):
                 "VWAP": snap.get("vwap", ""),
                 "VOLUME_RELATIF": snap.get("volume_ratio", ""),
                 "PERF_CAC40": market_return,
-                "SURPERF_CAC40": float(snap.get("return_open_pct", 0)) - market_return,
+                "SURPERF_CAC40": (
+                    float(snap.get("return_open_pct", 0)) - market_return
+                ),
                 "MOMENTUM_15M": snap.get("momentum_15m_pct", ""),
                 "RSI14": snap.get("rsi14", ""),
                 "ATR_PCT": snap.get("atr_pct", ""),
@@ -136,9 +142,14 @@ class TradingEngineV43(TradingEngineV42):
 
         if ml_choice is not None:
             LOGGER.info(
-                "ML shadow : choix=%s, score=%.2f, choix agent=%s (aucun impact sur le trade).",
+                "ML shadow : choix=%s, score=%.2f, choix agent=%s "
+                "(aucun impact sur le trade).",
                 ml_choice.name,
-                float(self._ml_shadow_current[ml_choice.ticker]["score_ml_combine"]),
+                float(
+                    self._ml_shadow_current[ml_choice.ticker][
+                        "score_ml_combine"
+                    ]
+                ),
                 agent_choice.name,
             )
 
