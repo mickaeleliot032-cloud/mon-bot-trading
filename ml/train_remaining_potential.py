@@ -264,7 +264,11 @@ def train_or_report(dataset: pd.DataFrame) -> dict[str, Any]:
         "rows_total": int(len(dataset)),
         "positive_total": positives,
         "negative_total": negatives,
-        "positive_rate": round(float(dataset[TARGET_COLUMN].mean()), 4) if len(dataset) else None,
+        "positive_rate": (
+            round(float(dataset[TARGET_COLUMN].mean()), 4)
+            if len(dataset)
+            else None
+        ),
         "feature_columns": NUMERIC_FEATURES + CATEGORICAL_FEATURES,
         "future_columns_excluded_from_features": OUTCOME_COLUMNS,
         "status": "waiting_for_data",
@@ -293,7 +297,9 @@ def train_or_report(dataset: pd.DataFrame) -> dict[str, Any]:
             "rows_validation": int(len(validation_set)),
             "days_total": int(dataset["DATE"].dt.date.nunique()),
             "accuracy": round(float(accuracy_score(y_true, predictions)), 4),
-            "precision": round(float(precision_score(y_true, predictions, zero_division=0)), 4),
+            "precision": round(
+            float(precision_score(y_true, predictions, zero_division=0)), 4
+        ),
             "recall": round(
             float(recall_score(y_true, predictions, zero_division=0)), 4
         ),
