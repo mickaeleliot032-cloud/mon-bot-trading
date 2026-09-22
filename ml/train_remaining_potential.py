@@ -294,7 +294,9 @@ def train_or_report(dataset: pd.DataFrame) -> dict[str, Any]:
             "days_total": int(dataset["DATE"].dt.date.nunique()),
             "accuracy": round(float(accuracy_score(y_true, predictions)), 4),
             "precision": round(float(precision_score(y_true, predictions, zero_division=0)), 4),
-            "recall": round(float(recall_score(y_true, predictions, zero_division=0)), 4),
+            "recall": round(
+            float(recall_score(y_true, predictions, zero_division=0)), 4
+        ),
             "brier": round(float(brier_score_loss(y_true, probabilities)), 4),
             "roc_auc": round(float(roc_auc_score(y_true, probabilities)), 4)
             if len(np.unique(y_true)) > 1
@@ -329,13 +331,19 @@ def main() -> None:
             "reason": str(exc),
             "target": f"PERF_MAX_APRES_SIGNAL >= {TARGET_THRESHOLD_PCT:.2f}%",
         }
-        METRICS_PATH.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+        METRICS_PATH.write_text(
+            json.dumps(metrics, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
         print(metrics["reason"])
         return
 
     dataset.to_csv(DATASET_PATH, index=False)
     metrics = train_or_report(dataset)
-    METRICS_PATH.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+    METRICS_PATH.write_text(
+        json.dumps(metrics, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     print(json.dumps(metrics, indent=2, ensure_ascii=False))
 
 
