@@ -125,7 +125,9 @@ def _extract_daily_field(data: pd.DataFrame, field: str, ticker: str) -> pd.Seri
     return pd.Series(dtype=float)
 
 
-def _build_historical_rank_lookup(dates: list[pd.Timestamp]) -> dict[tuple[str, str], dict[str, float]]:
+def _build_historical_rank_lookup(
+    dates: list[pd.Timestamp],
+) -> dict[tuple[str, str], dict[str, float]]:
     if not dates:
         return {}
 
@@ -136,7 +138,8 @@ def _build_historical_rank_lookup(dates: list[pd.Timestamp]) -> dict[tuple[str, 
 
     print(
         "Backfill Yahoo Finance : "
-        f"{len(normalized_dates)} journées à recalculer sur {len(tickers)} valeurs CAC40."
+        f"{len(normalized_dates)} journées à recalculer "
+        f"sur {len(tickers)} valeurs CAC40."
     )
     data = yf.download(
         tickers=tickers,
@@ -163,12 +166,20 @@ def _build_historical_rank_lookup(dates: list[pd.Timestamp]) -> dict[tuple[str, 
             high_series = _extract_daily_field(data, "High", ticker)
             if open_series.empty or high_series.empty:
                 continue
-            matching = [idx for idx in open_series.index if pd.Timestamp(idx).date() == day]
+            matching = [
+                idx
+                for idx in open_series.index
+                if pd.Timestamp(idx).date() == day
+            ]
             if not matching:
                 continue
             idx = matching[0]
-            open_price = pd.to_numeric(pd.Series([open_series.loc[idx]]), errors="coerce").iloc[0]
-            high_price = pd.to_numeric(pd.Series([high_series.loc[idx]]), errors="coerce").iloc[0]
+            open_price = pd.to_numeric(
+                pd.Series([open_series.loc[idx]]), errors="coerce"
+            ).iloc[0]
+            high_price = pd.to_numeric(
+                pd.Series([high_series.loc[idx]]), errors="coerce"
+            ).iloc[0]
             if pd.isna(open_price) or pd.isna(high_price) or float(open_price) <= 0:
                 continue
             perf_max = (float(high_price) / float(open_price) - 1.0) * 100.0
@@ -198,7 +209,11 @@ def _backfill_missing_labels(dataset: pd.DataFrame) -> pd.DataFrame:
     )
 
     ticker_column = next(
-        (column for column in ("TICKER", "SYMBOLE", "SYMBOL") if column in dataset.columns),
+        (
+            column
+            for column in ("TICKER", "SYMBOLE", "SYMBOL")
+            if column in dataset.columns
+        ),
         None,
     )
     if ticker_column is None:
@@ -226,7 +241,8 @@ def _backfill_missing_labels(dataset: pd.DataFrame) -> pd.DataFrame:
         filled += 1
 
     print(
-        f"Backfill : {filled} rangs historiques ajoutés sur {int(missing_mask.sum())} manquants."
+        f"Backfill : {filled} rangs historiques ajoutés "
+        f"sur {int(missing_mask.sum())} manquants."
     )
     return dataset
 
@@ -375,14 +391,18 @@ def train(dataset: pd.DataFrame) -> dict[str, Any]:
         "days_total": int(dataset["DATE"].dt.date.nunique()),
         "top3_total": positives,
         "top3_rate": round(float(dataset[TARGET_COLUMN].mean()), 4),
-        "validation_accuracy": round(float(accuracy_score(y_true, predictions)), 4),
+        "validation_accuracy": round(
+            float(accuracy_score(y_true, predictions)), 4
+        ),
         "validation_precision": round(
             float(precision_score(y_true, predictions, zero_division=0)), 4
         ),
         "validation_recall": round(
             float(recall_score(y_true, predictions, zero_division=0)), 4
         ),
-        "validation_brier": round(float(brier_score_loss(y_true, probabilities)), 4),
+        "validation_brier": round(
+            float(brier_score_loss(y_true, probabilities)), 4
+        ),
         "validation_baseline_top3_rate": round(float(np.mean(y_true)), 4),
         "validation_start": validation_set["DATE"].min().date().isoformat(),
         "validation_end": validation_set["DATE"].max().date().isoformat(),
