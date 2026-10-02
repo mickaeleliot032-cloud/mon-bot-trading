@@ -112,10 +112,12 @@ class TradingEngineV43(TradingEngineV42):
             prediction = scorer.predict(features)
             rows.append((item, prediction))
 
+        top3_tickers = {item.ticker for item in ranking[:3]}
         valid = [
             (item, pred)
             for item, pred in rows
-            if pred.get("score_ml_combine", "") != ""
+            if item.ticker in top3_tickers
+            and pred.get("score_ml_combine", "") != ""
         ]
         valid.sort(
             key=lambda pair: float(pair[1]["score_ml_combine"]), reverse=True
@@ -249,6 +251,13 @@ class TradingEngineV43(TradingEngineV42):
                     )
                     exit_price, exit_time = stop_price, stamp
                     break
+
+                gain_high_pct = (high / entry - 1) * 100
+                if (
+                    not extended_mode
+                    and gain_high_pct >= self.settings.breakeven_trigger_pct
+                ):
+                    stop_price = max(stop_price, entry)
 
                 if high >= base_target:
                     if (
