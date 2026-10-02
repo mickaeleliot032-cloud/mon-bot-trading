@@ -21,6 +21,7 @@ def new_state(day: date, capital: float) -> dict[str, Any]:
         "alerted_levels": {},
         "last_ranking": [],
         "summary_sent": False,
+        "v5_shadow_trade": None,
     }
 
 
