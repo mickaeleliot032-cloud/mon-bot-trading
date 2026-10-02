@@ -40,7 +40,14 @@ class StateStore:
         if state.get("date") == day.isoformat():
             return state
         capital = float(state.get("capital", initial_capital))
-        return new_state(day, capital)
+        fresh = new_state(day, capital)
+        # Les statistiques V5 shadow sont cumulatives entre les séances,
+        # contrairement au trade V5 courant qui est réinitialisé chaque jour.
+        if "v5_shadow_capital" in state:
+            fresh["v5_shadow_capital"] = state["v5_shadow_capital"]
+        if "v5_shadow_history" in state:
+            fresh["v5_shadow_history"] = state["v5_shadow_history"]
+        return fresh
 
     def save(self, state: dict[str, Any]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
