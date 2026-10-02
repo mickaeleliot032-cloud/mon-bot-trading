@@ -155,7 +155,7 @@ class TradingEngineV43(TradingEngineV42):
             )
 
     def _remember_v5_shadow_choice(self, choice: Score, now: datetime) -> None:
-        """Mémorise le premier choix V5 éligible de la journée, sans ordre réel."""
+        """Ouvre le premier paper trade V5 éligible, sans influencer V4.3."""
 
         if self.state.get("v5_shadow_trade"):
             return
@@ -177,21 +177,33 @@ class TradingEngineV43(TradingEngineV42):
             max(self.settings.min_sl_pct, atr_distance),
         )
         ml = self._ml_shadow_current.get(choice.ticker, {})
+        capital = float(
+            self.state.setdefault(
+                "v5_shadow_capital",
+                self.state.get("daily_start_capital", self.state["capital"]),
+            )
+        )
+        self.state["v5_shadow_daily_start_capital"] = capital
         self.state["v5_shadow_trade"] = {
             "ticker": choice.ticker,
             "name": choice.name,
             "entry_time": now.isoformat(),
             "entry_price": entry,
+            "shares": capital / entry,
+            "capital_before": capital,
             "score_ml": ml.get("score_ml_combine", ""),
             "proba_top3_ml": ml.get("proba_top3_ml", ""),
             "proba_potentiel_1pct_ml": ml.get("proba_potentiel_1pct_ml", ""),
-            "stop_pct": stop_distance,
-            "target_pct": float(self.settings.base_tp_pct),
+            "stop_price": entry * (1 - stop_distance / 100),
+            "base_target_price": entry * (1 + self.settings.base_tp_pct / 100),
+            "extended_target_price": entry * (1 + self.settings.extended_tp_pct / 100),
+            "extended_mode": False,
+            "peak_price": entry,
         }
         self.store.save(self.state)
 
     def _finalize_v5_shadow(self) -> dict[str, Any] | None:
-        """Calcule le résultat V5 avec les cours 1 minute, sans influencer V4.3."""
+        """Rejoue la logique de sortie V4.3 sur le choix V5 avec les cours 1 min."""
 
         trade = self.state.get("v5_shadow_trade")
         if not trade:
@@ -214,8 +226,11 @@ class TradingEngineV43(TradingEngineV42):
                 return trade
 
             entry = float(trade["entry_price"])
-            tp = entry * (1 + float(trade["target_pct"]) / 100)
-            sl = entry * (1 - float(trade["stop_pct"]) / 100)
+            stop_price = float(trade["stop_price"])
+            base_target = float(trade["base_target_price"])
+            extended_target = float(trade["extended_target_price"])
+            extended_mode = False
+            peak_price = entry
             reason = "SORTIE_HORAIRE"
             exit_price = float(pd.to_numeric(after["Close"], errors="coerce").dropna().iloc[-1])
             exit_time = after.index[-1]
@@ -223,18 +238,43 @@ class TradingEngineV43(TradingEngineV42):
             for stamp, row in after.iterrows():
                 high = float(row["High"])
                 low = float(row["Low"])
-                # Convention prudente : si TP et SL sont touchés dans la même
-                # bougie 1 minute, le SL est considéré comme atteint en premier.
-                if low <= sl:
-                    reason, exit_price, exit_time = "STOP_LOSS", sl, stamp
-                    break
-                if high >= tp:
-                    reason, exit_price, exit_time = "TP_1", tp, stamp
+                peak_price = max(peak_price, high)
+
+                # Convention prudente pour une bougie 1 min ambiguë.
+                if low <= stop_price:
+                    reason = (
+                        "TRAILING_STOP"
+                        if extended_mode
+                        else ("BREAKEVEN" if stop_price >= entry else "STOP_LOSS")
+                    )
+                    exit_price, exit_time = stop_price, stamp
                     break
 
+                if high >= base_target:
+                    if (
+                        stamp.time() < self.settings.extended_tp_cutoff
+                        and not extended_mode
+                    ):
+                        extended_mode = True
+                        stop_price = max(stop_price, entry)
+                    elif not extended_mode:
+                        reason, exit_price, exit_time = "TP_1", base_target, stamp
+                        break
+
+                if extended_mode:
+                    trailing = peak_price * (
+                        1 - self.settings.trailing_distance_pct / 100
+                    )
+                    stop_price = max(stop_price, trailing)
+                    if high >= extended_target:
+                        reason, exit_price, exit_time = "TP_2", extended_target, stamp
+                        break
+
+            gross_value = float(trade["shares"]) * exit_price
+            capital_after = gross_value - self.settings.round_trip_fees_eur
+            capital_before = float(trade["capital_before"])
+            net_pnl = capital_after - capital_before
             gross_return = (exit_price / entry - 1) * 100
-            capital_ref = float(self.state.get("daily_start_capital", self.state["capital"]))
-            net_pnl = capital_ref * gross_return / 100 - self.settings.round_trip_fees_eur
             trade.update(
                 {
                     "exit_time": exit_time.isoformat(),
@@ -242,16 +282,30 @@ class TradingEngineV43(TradingEngineV42):
                     "reason": reason,
                     "gross_return_pct": round(gross_return, 3),
                     "net_pnl_eur": round(net_pnl, 2),
+                    "capital_after_eur": round(capital_after, 2),
                     "result": "GAGNE" if net_pnl > 0 else "PERDU",
                 }
             )
+            self.state["v5_shadow_capital"] = round(capital_after, 2)
+            history = self.state.setdefault("v5_shadow_history", [])
+            history.append(
+                {
+                    "date": self.state.get("date"),
+                    **{key: trade.get(key) for key in (
+                        "ticker", "name", "entry_time", "entry_price", "exit_time",
+                        "exit_price", "score_ml", "reason", "gross_return_pct",
+                        "net_pnl_eur", "capital_before", "capital_after_eur", "result"
+                    )},
+                }
+            )
+            self.state["v5_shadow_history"] = history[-250:]
             self.store.save(self.state)
         except Exception as exc:
             LOGGER.warning("Résultat V5 shadow non calculable : %s", exc)
         return trade
 
     def _send_daily_summary(self) -> None:
-        """Ajoute le résultat V5 shadow au bilan Telegram V4.3."""
+        """Ajoute le résultat et le capital V5 shadow au bilan Telegram V4.3."""
 
         v5 = self._finalize_v5_shadow()
         start = float(self.state["daily_start_capital"])
@@ -294,7 +348,8 @@ class TradingEngineV43(TradingEngineV42):
                     f"Score ML : {float(v5['score_ml']):.3f}" if v5.get("score_ml") != "" else "Score ML : n/d",
                     f"Motif : {v5['reason']}",
                     f"Performance brute : {v5['gross_return_pct']:+.2f}%",
-                    f"Résultat net théorique : {v5['net_pnl_eur']:+.2f} €",
+                    f"Résultat net : {v5['net_pnl_eur']:+.2f} €",
+                    f"Capital V5 : {v5['capital_after_eur']:.2f} €",
                 ]
             )
         elif v5:
@@ -322,6 +377,7 @@ class TradingEngineV43(TradingEngineV42):
             "trade_taken": bool(trade),
             "trade": trade,
             "v5_shadow": v5,
+            "v5_shadow_capital_eur": self.state.get("v5_shadow_capital"),
             "leader": leader,
             "successful_scans": successful_scans,
             "scan_errors": scan_errors,
