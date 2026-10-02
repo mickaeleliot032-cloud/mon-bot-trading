@@ -141,6 +141,7 @@ class TradingEngineV43(TradingEngineV42):
             }
 
         if ml_choice is not None:
+            self._remember_v5_shadow_choice(ml_choice, now)
             LOGGER.info(
                 "ML shadow : choix=%s, score=%.2f, choix agent=%s "
                 "(aucun impact sur le trade).",
@@ -152,6 +153,183 @@ class TradingEngineV43(TradingEngineV42):
                 ),
                 agent_choice.name,
             )
+
+    def _remember_v5_shadow_choice(self, choice: Score, now: datetime) -> None:
+        """Mémorise le premier choix V5 éligible de la journée, sans ordre réel."""
+
+        if self.state.get("v5_shadow_trade"):
+            return
+        if now.time() < self.settings.entry_start_time:
+            return
+        if not self._entry_confirmed(choice):
+            return
+
+        entry = self.market_data.latest_price(choice.ticker)
+        if entry is None or entry <= 0:
+            entry = float(choice.snapshot["price"])
+        entry = float(entry)
+
+        atr_distance = (
+            float(choice.snapshot["atr_pct"]) * self.settings.atr_sl_multiplier
+        )
+        stop_distance = min(
+            self.settings.max_sl_pct,
+            max(self.settings.min_sl_pct, atr_distance),
+        )
+        ml = self._ml_shadow_current.get(choice.ticker, {})
+        self.state["v5_shadow_trade"] = {
+            "ticker": choice.ticker,
+            "name": choice.name,
+            "entry_time": now.isoformat(),
+            "entry_price": entry,
+            "score_ml": ml.get("score_ml_combine", ""),
+            "proba_top3_ml": ml.get("proba_top3_ml", ""),
+            "proba_potentiel_1pct_ml": ml.get("proba_potentiel_1pct_ml", ""),
+            "stop_pct": stop_distance,
+            "target_pct": float(self.settings.base_tp_pct),
+        }
+        self.store.save(self.state)
+
+    def _finalize_v5_shadow(self) -> dict[str, Any] | None:
+        """Calcule le résultat V5 avec les cours 1 minute, sans influencer V4.3."""
+
+        trade = self.state.get("v5_shadow_trade")
+        if not trade:
+            return None
+        if trade.get("result"):
+            return trade
+
+        try:
+            frame = self.market_data.download_universe(
+                [trade["ticker"]], period="1d", interval="1m"
+            ).get(trade["ticker"])
+            if frame is None or frame.empty:
+                return trade
+            frame = self._localize_market_frame(frame)
+            entry_time = datetime.fromisoformat(trade["entry_time"]).astimezone(
+                self.timezone
+            )
+            after = frame.loc[frame.index >= entry_time]
+            if after.empty:
+                return trade
+
+            entry = float(trade["entry_price"])
+            tp = entry * (1 + float(trade["target_pct"]) / 100)
+            sl = entry * (1 - float(trade["stop_pct"]) / 100)
+            reason = "SORTIE_HORAIRE"
+            exit_price = float(pd.to_numeric(after["Close"], errors="coerce").dropna().iloc[-1])
+            exit_time = after.index[-1]
+
+            for stamp, row in after.iterrows():
+                high = float(row["High"])
+                low = float(row["Low"])
+                # Convention prudente : si TP et SL sont touchés dans la même
+                # bougie 1 minute, le SL est considéré comme atteint en premier.
+                if low <= sl:
+                    reason, exit_price, exit_time = "STOP_LOSS", sl, stamp
+                    break
+                if high >= tp:
+                    reason, exit_price, exit_time = "TP_1", tp, stamp
+                    break
+
+            gross_return = (exit_price / entry - 1) * 100
+            capital_ref = float(self.state.get("daily_start_capital", self.state["capital"]))
+            net_pnl = capital_ref * gross_return / 100 - self.settings.round_trip_fees_eur
+            trade.update(
+                {
+                    "exit_time": exit_time.isoformat(),
+                    "exit_price": round(exit_price, 4),
+                    "reason": reason,
+                    "gross_return_pct": round(gross_return, 3),
+                    "net_pnl_eur": round(net_pnl, 2),
+                    "result": "GAGNE" if net_pnl > 0 else "PERDU",
+                }
+            )
+            self.store.save(self.state)
+        except Exception as exc:
+            LOGGER.warning("Résultat V5 shadow non calculable : %s", exc)
+        return trade
+
+    def _send_daily_summary(self) -> None:
+        """Ajoute le résultat V5 shadow au bilan Telegram V4.3."""
+
+        v5 = self._finalize_v5_shadow()
+        start = float(self.state["daily_start_capital"])
+        end = float(self.state["capital"])
+        trade = self.state.get("last_trade")
+        ranking = self.state.get("last_ranking", [])
+        scans = self.state.get("scan_history", [])
+        alerts = self.state.get("alert_history", [])
+
+        leader = ranking[0] if ranking else None
+        leader_text = (
+            f"{leader['name']} {leader['score']:.1f}/100"
+            if leader
+            else "aucun classement disponible"
+        )
+        successful_scans = sum(1 for scan in scans if scan.get("status") == "ok")
+        scan_errors = sum(1 for scan in scans if scan.get("status") == "error")
+        strong_alerts = sum(1 for alert in alerts if alert.get("level") == "FORT")
+
+        lines = ["📊 BILAN DU JOUR V4.3 + V5 SHADOW"]
+        if trade:
+            lines.extend(
+                [
+                    "",
+                    "V4.3 — trade réel paper",
+                    f"Action : {trade['name']}",
+                    f"Motif : {trade['reason']}",
+                    f"Performance brute : {trade['gross_return_pct']:+.2f}%",
+                    f"Résultat net : {trade['net_pnl_eur']:+.2f} €",
+                ]
+            )
+        else:
+            lines.extend(["", "V4.3 — trade réel paper", "Trade simulé : non"])
+
+        lines.extend(["", "V5 — Shadow ML"])
+        if v5 and v5.get("result"):
+            lines.extend(
+                [
+                    f"Action : {v5['name']}",
+                    f"Score ML : {float(v5['score_ml']):.3f}" if v5.get("score_ml") != "" else "Score ML : n/d",
+                    f"Motif : {v5['reason']}",
+                    f"Performance brute : {v5['gross_return_pct']:+.2f}%",
+                    f"Résultat net théorique : {v5['net_pnl_eur']:+.2f} €",
+                ]
+            )
+        elif v5:
+            lines.append(f"Action : {v5['name']} — résultat indisponible")
+        else:
+            lines.append("Aucun trade V5 éligible aujourd'hui")
+
+        lines.extend(
+            [
+                "",
+                f"Capital V4.3 : {end:.2f} € ({end - start:+.2f} €)",
+                f"Dernier leader observé : {leader_text}",
+                f"Scans réussis : {successful_scans}",
+                f"Erreurs de scan : {scan_errors}",
+                f"Alertes fortes : {strong_alerts}",
+            ]
+        )
+        self.notifier.send("\n".join(lines))
+
+        summary = {
+            "date": self.state.get("date"),
+            "capital_start_eur": start,
+            "capital_end_eur": end,
+            "net_pnl_eur": end - start,
+            "trade_taken": bool(trade),
+            "trade": trade,
+            "v5_shadow": v5,
+            "leader": leader,
+            "successful_scans": successful_scans,
+            "scan_errors": scan_errors,
+            "strong_alerts": strong_alerts,
+        }
+        self.google_sheets.send("summary", **summary)
+        self.state["summary_sent"] = True
+        self.store.save(self.state)
 
     def _notify_level_change(self, leader: Score) -> None:
         """Journalise un signal enrichi sans modifier la logique de trading."""
