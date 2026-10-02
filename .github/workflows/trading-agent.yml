@@ -112,7 +112,8 @@ jobs:
               --header "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
               --output /tmp/ml.zip
-            unzip -o /tmp/ml.zip -d .
+            mkdir -p data/ml
+            unzip -o /tmp/ml.zip -d data/ml
           fi
 
       - name: Installer les dépendances
