@@ -684,6 +684,51 @@ class TradingEngineV43(TradingEngineV42):
 
         return payload
 
+    def _timing_filter_allows_entry(self, now: datetime, score: Score) -> bool:
+        """Filtre expérimental 70 % calculé sans données futures.
+
+        Ratio = progression depuis l'ouverture / amplitude haussière déjà
+        observée avant la minute du signal. Ce ratio n'est PAS l'indicateur
+        MOUVEMENT_CONSOMME_PCT du suivi de fin de journée.
+        """
+        try:
+            frame = self.market_data.download_universe(
+                [score.ticker], period="1d", interval="1m"
+            ).get(score.ticker)
+            if frame is None or frame.empty:
+                LOGGER.warning("Filtre timing : données absentes pour %s ; entrée refusée.", score.ticker)
+                return False
+            session = self._localize_market_frame(frame)
+            session = session.loc[session.index.date == now.date()]
+            cutoff = now.replace(second=0, microsecond=0)
+            before = session.loc[session.index < cutoff]
+            if before.empty:
+                LOGGER.warning("Filtre timing : historique insuffisant pour %s ; entrée refusée.", score.ticker)
+                return False
+            opens = pd.to_numeric(before["Open"], errors="coerce").dropna()
+            highs = pd.to_numeric(before["High"], errors="coerce").dropna()
+            if opens.empty or highs.empty:
+                return False
+            opening = float(opens.iloc[0])
+            prior_high = float(highs.max())
+            current = float(score.snapshot["price"])
+            if opening <= 0 or current <= 0:
+                return False
+            amplitude = prior_high - opening
+            if amplitude <= 0:
+                LOGGER.info("Filtre timing %s : aucune hausse préalable ; entrée autorisée.", score.ticker)
+                return True
+            consumed = max(0.0, (current - opening) / amplitude * 100)
+            allowed = consumed <= 70.0
+            LOGGER.info(
+                "Filtre timing 70 %% : %s, progression %.1f %% du mouvement déjà observé ; %s.",
+                score.ticker, consumed, "entrée autorisée" if allowed else "entrée refusée",
+            )
+            return allowed
+        except Exception:
+            LOGGER.exception("Filtre timing : calcul impossible pour %s ; entrée refusée.", score.ticker)
+            return False
+
     def _open_position(self, now: datetime, score: Score) -> None:
         """Ouvre le paper trade avec le dernier cours 1 minute disponible.
 
@@ -693,6 +738,9 @@ class TradingEngineV43(TradingEngineV42):
         En cas d'indisponibilité du flux 1 minute, le moteur retombe sur le prix
         5 minutes existant afin de ne pas bloquer l'agent.
         """
+
+        if not self._timing_filter_allows_entry(now, score):
+            return
 
         snapshot_price = float(score.snapshot["price"])
         latest_entry = self.market_data.latest_price(score.ticker)
