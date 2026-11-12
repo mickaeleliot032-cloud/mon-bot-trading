@@ -54,7 +54,7 @@ def quantitative_score(
         np.interp(open_return, [-1.0, 0.0, 0.4, 1.2, 2.0], [0, 5, 13, 18, 15])
     )
     momentum = snapshot["momentum_15m_pct"]
-    score += float(np.interp(momentum, [-0.8, 0.0, 0.25, 0.7], [0, 3, 8, 10]))
+    score += float(np.interp(momentum, [-0.8, 0.0, 0.25, 0.7, 1.2], [0, 3, 9, 15, 18]))
     if open_return > 0:
         reasons.append(f"momentum séance +{open_return:.2f}%")
 
@@ -72,18 +72,18 @@ def quantitative_score(
 
     current_rsi = snapshot["rsi14"]
     if 50 <= current_rsi <= 68:
-        score += 10
+        score += 6
         reasons.append(f"RSI sain {current_rsi:.0f}")
     elif 42 <= current_rsi < 50 or 68 < current_rsi <= 74:
-        score += 6
+        score += 4
     elif 35 <= current_rsi < 42 or 74 < current_rsi <= 80:
-        score += 3
+        score += 2
 
     atr_pct = snapshot["atr_pct"]
     if 0.35 <= atr_pct <= 2.5:
-        score += 10
+        score += 7
     elif 0.2 <= atr_pct <= 3.5:
-        score += 5
+        score += 4
     else:
         score += 2
 
