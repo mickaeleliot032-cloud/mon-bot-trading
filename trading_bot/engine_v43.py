@@ -739,8 +739,8 @@ class TradingEngineV43(TradingEngineV42):
         5 minutes existant afin de ne pas bloquer l'agent.
         """
 
-        if not self._timing_filter_allows_entry(now, score):
-            return
+        # Le filtre expérimental 70 % ne bloque plus les entrées.
+        # Les contrôles de risque et de confirmation du moteur parent restent actifs.
 
         snapshot_price = float(score.snapshot["price"])
         latest_entry = self.market_data.latest_price(score.ticker)
