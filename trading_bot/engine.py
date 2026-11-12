@@ -260,7 +260,7 @@ class TradingEngine:
                     headlines=news_result.headlines if news_result else (),
                 )
             )
-        ranking.sort(key=lambda item: item.final, reverse=True)
+        ranking.sort(key=lambda item: (item.eligible, item.final), reverse=True)
         self._remember_ranking(ranking)
 
         # Hook analytique optionnel. Les versions enrichies peuvent calculer un
@@ -285,8 +285,18 @@ class TradingEngine:
         )
         self._notify_level_change(leader)
         if allow_entry and not self.state.get("entry_taken"):
-            if self._entry_confirmed(leader):
-                self._open_position(now, leader)
+            # Le leader non confirme ne bloque plus les autres candidats.
+            for rank, candidate in enumerate(ranking, start=1):
+                if not candidate.eligible:
+                    continue
+                if candidate.final < self.settings.signal_threshold:
+                    break
+                if not self._entry_confirmed(candidate):
+                    continue
+                LOGGER.info("Candidat retenu : %s (rang %d).", candidate.name, rank)
+                self._open_position(now, candidate)
+                if self.state.get("entry_taken") or self.state.get("position"):
+                    break
         return ranking
 
     def _remember_ranking(self, ranking: list[Score]) -> None:
